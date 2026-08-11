@@ -205,6 +205,34 @@ Concrete differences from the sway setup documented elsewhere in this file:
   actual point of the switch (real movable/resizable windows), not an oversight. Double-
   click a titlebar or `W-f` (per `config/wm/labwc-rc.xml`) to maximize/unmaximize.
 
+### Taskbar: `waybar` + `wofi` added on top, same day
+
+labwc itself ships no panel — the right-click menu alone didn't fully match what was
+asked for ("application menu and window list... like lxqt"). Added a real always-visible
+taskbar:
+- **`waybar`** (bottom panel, `config/wm/waybar-config.jsonc` + `waybar-style.css` →
+  `/etc/xdg/labwc/waybar-*`) — a `custom/launcher` module (left, "☰ Menu" button) and a
+  `wlr/taskbar` module (center, live window list — click an entry to focus/toggle it,
+  confirmed working) plus a clock (right).
+- **`wofi --show drun`** is what the launcher button runs — a proper GTK app-launcher
+  showing every installed `.desktop` entry (search-filterable). Confirmed: shows
+  Terminal/Chromium/Vinegar as expected, but also every other `.desktop` file that
+  happened to ship with unrelated dependency packages (Avahi browsers, Qt V4L2 utilities,
+  `xgps`, `lstopo`, etc.) — cosmetic clutter, not a functional problem, not cleaned up.
+- **Foot didn't ship its own `.desktop` file** — added a minimal one
+  (`/usr/share/applications/foot.desktop`, generated inline in the `Dockerfile`) so the
+  terminal actually shows up in wofi's list at all.
+- Both are started via **labwc's own autostart mechanism**
+  (`config/wm/labwc-autostart` → `/etc/xdg/labwc/autostart`, a plain shell script labwc
+  runs on startup — same XDG-search-path pattern as `rc.xml`/`menu.xml`), not
+  `entrypoint.sh` — matches labwc's own idiom for "launch my companion programs," keeps
+  `entrypoint.sh` compositor-agnostic.
+- **Wofi's list items need a double-click to launch**, not a single click (single click
+  only *selects*/highlights the row — this matches a broader pattern already noted
+  elsewhere in this file: some GTK-ish UI in this stack treats a first click as
+  focus/select-only). Real VNC clients handle this fine (a normal double-click); only
+  scripted single-click-based test tooling needs to account for it.
+
 ## Key constraints to keep in mind while building
 
 - **GPU is a hard requirement, not a nice-to-have**, for Roblox Studio's DXVK/native-Vulkan

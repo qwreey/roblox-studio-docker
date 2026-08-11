@@ -58,13 +58,16 @@ browser-based noVNC client, etc.):
   If you're on the same machine, `localhost:5900`.
 - **Password**: whatever `VNC_PASSWORD` was set to. If it was left unset, connect with no
   password.
-- You should see a plain desktop (`labwc` — a normal floating/stacking window manager,
-  decorated windows with a titlebar you can drag/resize, no taskbar/panel by default)
-  with whatever windows are currently open — Roblox Studio, a terminal, etc.
-  **Right-click the desktop background for an app menu** (Terminal / Roblox Studio /
-  Chromium), or `Mod4` (Super/Windows key) + `Return` to open a terminal (`foot`)
-  directly if you need a shell inside the session itself. Double-click a titlebar (or
-  `Mod4+F`) to maximize/unmaximize a window.
+- You should see a normal-feeling desktop (`labwc` — decorated windows with a titlebar
+  you can drag/resize) with a **taskbar at the bottom**: a "☰ Menu" button on the left
+  (opens a searchable app launcher — every installed app, including Terminal/Roblox
+  Studio/Chromium), a live window list in the center (click an entry to focus/switch to
+  it), and a clock on the right. Right-clicking the desktop background also opens a
+  simpler menu with just Terminal/Roblox Studio/Chromium. `Mod4` (Super/Windows key) +
+  `Return` opens a terminal (`foot`) directly. Double-click a titlebar (or `Mod4+F`) to
+  maximize/unmaximize a window.
+- **In the app launcher specifically, single-click only selects an item — double-click
+  (or select + Enter) actually launches it.** Easy to miss the first time.
 - Mouse and keyboard both work through the VNC connection normally. (During development,
   scripted/synthetic VNC input from a hand-rolled test client had a reproducible issue
   where certain buttons wouldn't register clicks — that was specific to the test tooling,

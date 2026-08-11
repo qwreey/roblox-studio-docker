@@ -1,0 +1,4 @@
+#!/bin/sh
+# labwc has no panel of its own — start one, matching the app-menu/window-list UX
+# requested (see CLAUDE.md's "Window manager" section).
+waybar -c /etc/xdg/labwc/waybar-config.jsonc -s /etc/xdg/labwc/waybar-style.css &

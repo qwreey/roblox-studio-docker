@@ -36,6 +36,8 @@ RUN pacman -Syu --noconfirm --needed \
       xdg-desktop-portal-gnome \
       chromium \
       grim \
+      waybar \
+      wofi \
     && pacman -Scc --noconfirm \
     && rm -rf /var/cache/pacman/pkg/*
 
@@ -67,7 +69,18 @@ RUN printf '[Desktop Entry]\nVersion=1.0\nName=Chromium\nExec=/usr/bin/chromium 
 
 COPY config/wm/labwc-rc.xml /etc/xdg/labwc/rc.xml
 COPY config/wm/labwc-menu.xml /etc/xdg/labwc/menu.xml
+COPY config/wm/labwc-autostart /etc/xdg/labwc/autostart
+COPY config/wm/waybar-config.jsonc /etc/xdg/labwc/waybar-config.jsonc
+COPY config/wm/waybar-style.css /etc/xdg/labwc/waybar-style.css
 COPY config/vinegar/config.toml /etc/vinegar-default-config.toml
+RUN chmod +x /etc/xdg/labwc/autostart
+
+# wofi's "drun" mode (the app launcher waybar's menu button triggers) lists installed
+# .desktop entries — foot doesn't ship one by default, add a minimal one so the terminal
+# shows up alongside Vinegar's own and the chromium-nosandbox one added above.
+RUN printf '[Desktop Entry]\nVersion=1.0\nName=Terminal\nExec=foot\nTerminal=false\nIcon=utilities-terminal\nType=Application\nCategories=System;TerminalEmulator;\n' \
+      > /usr/share/applications/foot.desktop
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
