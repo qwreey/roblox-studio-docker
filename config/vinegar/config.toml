@@ -1,0 +1,9 @@
+[studio]
+# Vinegar's own WebView2 install is left disabled by default. Roblox Studio's embedded
+# WebView2 login page loads correctly at the network level under this container's
+# headless-Wayland setup but renders as a blank/broken window (a known Wine+WebView2-on-
+# Wayland compositing bug, not fixable from this side) — with the WebView install
+# disabled, Studio correctly falls back to its native "Login via Browser" flow instead,
+# which is the path that actually works here. See CLAUDE.md's "Milestone 3" section
+# before re-enabling this.
+webview = ""

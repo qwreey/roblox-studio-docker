@@ -1,0 +1,32 @@
+# Minimal sway config for headless Docker use (WLR_BACKENDS=headless, no seatd/logind).
+set $mod Mod4
+
+output * resolution 1920x1080
+
+xwayland enable
+
+bindsym $mod+Return exec foot
+bindsym $mod+Shift+q kill
+
+bindsym $mod+j focus left
+bindsym $mod+k focus down
+bindsym $mod+l focus up
+bindsym $mod+semicolon focus right
+
+bindsym $mod+Shift+j move left
+bindsym $mod+Shift+k move down
+bindsym $mod+Shift+l move up
+bindsym $mod+Shift+semicolon move right
+
+bindsym $mod+h splith
+bindsym $mod+v splitv
+bindsym $mod+f fullscreen toggle
+bindsym $mod+Shift+space floating toggle
+
+bindsym $mod+1 workspace 1
+bindsym $mod+2 workspace 2
+bindsym $mod+Shift+1 move container to workspace 1
+bindsym $mod+Shift+2 move container to workspace 2
+
+bindsym $mod+Shift+r reload
+bindsym $mod+Shift+e exit

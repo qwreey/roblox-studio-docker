@@ -1,0 +1,26 @@
+services:
+  studio:
+    build:
+      context: .
+    container_name: roblox-studio
+    ports:
+      - "${VNC_PORT:-5900}:5900"
+    devices:
+      - /dev/dri:/dev/dri
+    cap_add:
+      - SYS_NICE
+    # Docker's default 64MB /dev/shm is far too small for Chromium (and likely for Wine/
+    # Roblox Studio too) — causes net::ERR_INSUFFICIENT_RESOURCES on many resource loads
+    # even though the exact same URL loads fine outside the container.
+    shm_size: '2gb'
+    volumes:
+      # Vinegar/Wine state — Kombucha Wine build, Roblox Studio install, Wine prefixes.
+      # Without this, every container recreate (not just rebuild) re-downloads
+      # everything from scratch and loses Roblox login state.
+      - ./data/vinegar-data:/root/.local/share/vinegar
+      - ./data/vinegar-config:/root/.config/vinegar
+      - ./data/vinegar-cache:/root/.cache/vinegar
+    environment:
+      VNC_PORT: "5900"
+      VNC_PASSWORD: "${VNC_PASSWORD:-}"
+    restart: unless-stopped
