@@ -8,12 +8,12 @@ those.
 
 ## Status as of 2026-08-11
 
-Working end-to-end and verified with a real account: headless Wayland compositor, real
-AMD GPU acceleration, Roblox Studio installed and running via Vinegar/Wine, browser-based
-login, and a full 3D place open and rendering correctly (verified: the built-in Studio
-Tour's carnival scene — carousel, trees, buildings, sky — rendering in real time with
-mouse interaction working). Login state and the Wine/Studio install both survive
-container restarts.
+Working end-to-end and verified with a real account: headless Wayland compositor
+(`labwc`), real AMD GPU acceleration, Roblox Studio installed and running via
+Vinegar/Wine, browser-based login, and a full 3D place open and rendering correctly
+(verified: the built-in Studio Tour's carnival scene — carousel, trees, buildings, sky —
+rendering in real time with mouse interaction working). Login state and the Wine/Studio
+install both survive container restarts.
 
 Not yet done: Milestone 4 (a standalone Chrome-works check — Chrome already works fine as
 part of the login flow, just not separately verified per the original plan), Chrome's own
@@ -37,12 +37,12 @@ The container publishes VNC on `${VNC_PORT:-5900}` (host port, default 5900).
 quick local test, not fine for anything reachable off the host.
 
 Roblox Studio itself is **not auto-started**. Once the container's up, either launch it
-yourself over VNC (open a terminal in the desktop — see "Connecting" below — and run
-`vinegar`), or from the host:
+yourself over VNC (right-click the desktop → "Roblox Studio (Vinegar)" — see "Connecting"
+below), or from the host:
 
 ```sh
 docker exec roblox-studio bash -c '
-  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-1 HOME=/root \
+  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0 HOME=/root \
          DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/xdg-runtime/bus"
   vinegar &
 '
@@ -58,11 +58,13 @@ browser-based noVNC client, etc.):
   If you're on the same machine, `localhost:5900`.
 - **Password**: whatever `VNC_PASSWORD` was set to. If it was left unset, connect with no
   password.
-- You should see a plain desktop (sway, no taskbar/panel by default) with whatever
-  windows are currently open — Roblox Studio, a terminal, etc. There's no window
-  decoration chrome beyond a plain titlebar; use `Mod4` (Super/Windows key) + `Return` to
-  open a terminal (`foot`) if you need a shell inside the session itself, or just
-  `docker exec` from the host as shown above.
+- You should see a plain desktop (`labwc` — a normal floating/stacking window manager,
+  decorated windows with a titlebar you can drag/resize, no taskbar/panel by default)
+  with whatever windows are currently open — Roblox Studio, a terminal, etc.
+  **Right-click the desktop background for an app menu** (Terminal / Roblox Studio /
+  Chromium), or `Mod4` (Super/Windows key) + `Return` to open a terminal (`foot`)
+  directly if you need a shell inside the session itself. Double-click a titlebar (or
+  `Mod4+F`) to maximize/unmaximize a window.
 - Mouse and keyboard both work through the VNC connection normally. (During development,
   scripted/synthetic VNC input from a hand-rolled test client had a reproducible issue
   where certain buttons wouldn't register clicks — that was specific to the test tooling,
@@ -93,7 +95,7 @@ would show, since it reads the same buffer `wayvnc` does):
 
 ```sh
 docker exec roblox-studio bash -c '
-  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-1
+  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0
   grim /tmp/shot.png
 '
 docker cp roblox-studio:/tmp/shot.png ./shot.png
@@ -109,7 +111,7 @@ is a real Vulkan render, not just a screenshot of a blank window:
 ```sh
 docker exec roblox-studio pacman -Sy --noconfirm --needed mesa-demos
 docker exec roblox-studio bash -c '
-  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-1
+  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0
   vkcube
 '
 ```

@@ -1,8 +1,8 @@
 FROM archlinux:latest
 
 RUN pacman -Syu --noconfirm --needed \
-      sway \
-      swaybg \
+      labwc \
+      wlr-randr \
       wayvnc \
       xorg-xwayland \
       foot \
@@ -65,7 +65,8 @@ RUN printf '[Desktop Entry]\nVersion=1.0\nName=Chromium\nExec=/usr/bin/chromium 
       > /usr/share/applications/chromium-nosandbox.desktop \
     && xdg-mime default chromium-nosandbox.desktop x-scheme-handler/http x-scheme-handler/https text/html
 
-COPY config/wm/sway-config /etc/sway/config
+COPY config/wm/labwc-rc.xml /etc/xdg/labwc/rc.xml
+COPY config/wm/labwc-menu.xml /etc/xdg/labwc/menu.xml
 COPY config/vinegar/config.toml /etc/vinegar-default-config.toml
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!-- Minimal labwc config for headless Docker use (WLR_BACKENDS=headless, no seatd/logind).
+     Floating/stacking WM with decorated windows + a right-click app menu (menu.xml) —
+     see CLAUDE.md for why this replaced sway. -->
+<labwc_config>
+  <core>
+    <gap>0</gap>
+  </core>
+  <keyboard>
+    <keybind key="W-Return">
+      <action name="Execute" command="foot"/>
+    </keybind>
+    <keybind key="W-q">
+      <action name="Close"/>
+    </keybind>
+    <keybind key="W-f">
+      <action name="ToggleMaximize"/>
+    </keybind>
+    <keybind key="A-Tab">
+      <action name="NextWindow"/>
+    </keybind>
+  </keyboard>
+  <mouse>
+    <context name="Root">
+      <mousebind button="Right" action="Press" direction="Down">
+        <action name="ShowMenu" menu="root-menu"/>
+      </mousebind>
+    </context>
+  </mouse>
+</labwc_config>

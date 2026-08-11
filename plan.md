@@ -182,9 +182,13 @@ container actually boots and it's clear what needs to be overridable.
 
 ## Open questions (resolve before or during implementation, not blocking the plan itself)
 
-- sway vs labwc for the compositor — sway has more Docker/headless prior art (per
-  `research/03` §1); using sway unless it fights some app badly enough to reconsider
-  labwc's floating-by-default feel.
+- ~~sway vs labwc for the compositor~~ — **resolved 2026-08-11: switched to `labwc`.**
+  Built and verified with sway through Milestone 3, then switched at the owner's request
+  — sway's borderless tiling is unfriendly for typical users vs. labwc's decorated,
+  movable/resizable floating windows + right-click app menu. Re-verified working after
+  the switch (GPU accel, app menu, full Vinegar/Studio relaunch with login persisted).
+  See CLAUDE.md's "Window manager: `labwc`, not `sway`" section for the concrete
+  differences (socket name, config paths, output-resolution mechanism) and revert path.
 - VNC vs RDP vs both — `wayvnc` is the natural default for a wlroots headless compositor
   (`research/03` §2); weston's built-in RDP backend is the documented fallback if RDP is
   specifically wanted later, but note it forfeits wayvnc entirely (weston doesn't

@@ -20,7 +20,7 @@ is a local stdio Native Messaging connection, not a hostable/remote MCP server �
 no way to point a Claude Code session running elsewhere at a Chrome instance inside this
 container, and the owner has confirmed this is not something to solve here. Milestone 4
 is scoped down to: **install Chrome, confirm it launches and renders correctly under
-sway (a real browser window, visibly usable over VNC) — nothing more.** Do not install
+the WM (a real browser window, visibly usable over VNC) — nothing more.** Do not install
 Claude Code inside this container, do not attempt `claude --chrome`, do not build
 anything to wire the two together. See "Backlog / explicitly deferred" near the bottom
 of this file for the (not-currently-planned) future item.
@@ -47,7 +47,7 @@ Docker Compose, self-contained, is the whole point.
      host-driver-version pinning needed; NVIDIA needs the separate NVIDIA Container
      Toolkit/CDI path — that's the one real per-vendor branch). This host has AMD
      (`amdgpu`) — plain Mesa `vulkan-radeon`, no NVIDIA CDI path needed here.
-   - **Headless Wayland (`sway`, `WLR_BACKENDS=headless` + `wayvnc`), NOT X11/Xvfb** —
+   - **Headless Wayland (`WLR_BACKENDS=headless` + `wayvnc`), NOT X11/Xvfb** —
      this reverses the synthesis's original recommendation. Reason: empirical testing
      during Milestone 1/2 build-out found the synthesis's core claim ("DRI3 works
      identically under Xvfb+X11") is simply false — `Xvfb` has **zero** DRI3/GLX/Vulkan
@@ -166,6 +166,45 @@ vinegar/config.toml` → `/etc/vinegar-default-config.toml`, seeded by `entrypoi
 `~/.config/vinegar/config.toml` only if that file doesn't already exist) — a genuinely
 fresh `./data/vinegar-config` won't hit the blank-WebView2 bug on its first-ever launch.
 
+## Window manager: `labwc`, not `sway` — switched 2026-08-11
+
+Milestones 1–3 were built and verified with `sway` (a tiling WM). Switched to `labwc` (a
+stacking/floating WM, wlroots-based like sway — think Openbox for Wayland) afterward, at
+the owner's request: sway's borderless tiling is unfamiliar/unfriendly for typical users
+compared to normal decorated, movable, resizable windows with a right-click app menu.
+Re-verified working after the swap (GPU accel via `vkcube`, the app menu, and a full
+Vinegar/Studio relaunch with login persisted — all confirmed). Both compositors are
+wlroots-based, so this was a genuinely small change, not a re-architecture — same
+`WLR_BACKENDS=headless`/`WLR_LIBINPUT_NO_DEVICES=1` mechanism, same GPU path, same
+`wayvnc` capture mechanism. If labwc ever needs reverting, `sway`/`swaybg` +
+`config/wm/sway-config` are one `git checkout` away (see git history at the commit before
+this switch) — this was deliberately tried as a low-risk, easily-reversible experiment.
+
+Concrete differences from the sway setup documented elsewhere in this file:
+- Config lives at `/etc/xdg/labwc/rc.xml` (window/keybind behavior) and `/etc/xdg/labwc/
+  menu.xml` (the right-click root menu — Terminal/Roblox Studio/Chromium entries),
+  copied from `config/wm/labwc-rc.xml` and `config/wm/labwc-menu.xml`. Not `/etc/sway/
+  config` anymore.
+- The Wayland socket labwc creates is **`wayland-0`**, not sway's `wayland-1` —
+  `entrypoint.sh`'s socket-detection loop already handles this generically (globs for any
+  `wayland-*`), no fix needed there, but manual `docker exec` commands that hardcode
+  `WAYLAND_DISPLAY=wayland-1` (including older text in this file/`SETUP.md` written
+  during the sway era) need `wayland-0` instead now.
+- The headless output is still named **`HEADLESS-1`** (this is `wlroots`' own headless
+  backend, not compositor-specific — unchanged), but labwc doesn't have sway's simple
+  `output * resolution ...` config directive to size it. `entrypoint.sh` now runs
+  `wlr-randr --output HEADLESS-1 --custom-mode 1920x1080` after labwc starts — note
+  **`--custom-mode`, not `--mode`**: the headless backend only pre-registers a default
+  1280x720 mode with no fixed EDID mode list to pick from, so `--mode` (select from
+  existing modes) fails with "unknown mode" where `--custom-mode` (define a new one)
+  succeeds.
+- No `swaymsg`-equivalent IPC tooling was set up for labwc (sway's own IPC protocol is
+  sway-specific) — for scripted/debugging window inspection, use generic Wayland
+  protocol tools (`wlr-randr` for outputs) rather than looking for a labwc IPC socket.
+- Windows are **not maximized by default** (floating, sized by the app) — this is the
+  actual point of the switch (real movable/resizable windows), not an oversight. Double-
+  click a titlebar or `W-f` (per `config/wm/labwc-rc.xml`) to maximize/unmaximize.
+
 ## Key constraints to keep in mind while building
 
 - **GPU is a hard requirement, not a nice-to-have**, for Roblox Studio's DXVK/native-Vulkan
@@ -210,26 +249,33 @@ fresh `./data/vinegar-config` won't hit the blank-WebView2 bug on its first-ever
   and `wait -n`s on them so the container dies if any one of them dies. Revisit this if
   the process count grows enough to make that fragile (e.g. once Vinegar/Chrome are
   added).
-- **Display server: `sway` headless + `wayvnc`, not Xvfb/X11** — see the "Where to
-  start" section above for why. Key env vars `entrypoint.sh` sets: `XDG_RUNTIME_DIR=
-  /tmp/xdg-runtime` (Wayland requires this to exist and be writable — nothing works
-  without it, including `vulkaninfo`/`vkcube`), `WLR_BACKENDS=headless`,
-  `WLR_LIBINPUT_NO_DEVICES=1` (skips libinput device enumeration so wlroots never calls
-  into libseat — no seatd/logind needed), `WLR_RENDERER=gles2` (real GPU accel via the
-  render node once `/dev/dri` is passed through). The headless backend's virtual output
-  is always named **`HEADLESS-1`** — `wayvnc`'s `--output=HEADLESS-1` and any future
-  `swaymsg`/`swaybg` output-targeting config should hardcode this, it's stable as long as
-  only one output is created.
-- **`sway`'s binary needs `CAP_SYS_NICE`** (`docker-compose.yml` → `cap_add: [SYS_NICE]`)
-  — it ships with `cap_sys_nice=ep` as a file capability, which is not in Docker's
-  default capability set even for a root process; without this, `exec()` of `sway` fails
-  outright with `Operation not permitted`, not a runtime error.
-- **Config layout** (per `plan.md`'s proposed tree, confirmed working as of Milestone
-  1+2): `config/wm/sway-config` is copied to `/etc/sway/config` in the image. Other
-  `config/*` subdirs (`remote/`, `vinegar/`, `claude/`) exist but are still empty — no
-  `wayvnc` config file committed, since its password comes from `$VNC_PASSWORD` and
-  `entrypoint.sh` generates `/tmp/wayvnc.cfg` at container start instead (same pattern as
-  the old x11vnc setup: never bake a secret into the image/repo).
+- **Display server: `labwc` (headless) + `wayvnc`, not Xvfb/X11** — see the "Where to
+  start" section above for the X11-vs-Wayland reasoning, and "Window manager: `labwc`,
+  not `sway`" above for why labwc specifically (was sway through Milestone 3, switched
+  after). Key env vars `entrypoint.sh` sets: `XDG_RUNTIME_DIR=/tmp/xdg-runtime` (Wayland
+  requires this to exist and be writable — nothing works without it, including
+  `vulkaninfo`/`vkcube`), `WLR_BACKENDS=headless`, `WLR_LIBINPUT_NO_DEVICES=1` (skips
+  libinput device enumeration so wlroots never calls into libseat — no seatd/logind
+  needed), `WLR_RENDERER=gles2` (real GPU accel via the render node once `/dev/dri` is
+  passed through). The headless backend's virtual output is always named
+  **`HEADLESS-1`** (this is wlroots' own naming, not compositor-specific) — `wayvnc`'s
+  `--output=HEADLESS-1` and the `wlr-randr` resolution-setting call should hardcode this,
+  it's stable as long as only one output is created. The Wayland *socket* labwc creates
+  is `wayland-0`, not sway's old `wayland-1` — don't confuse the two.
+- **`labwc`'s binary needs `CAP_SYS_NICE`** (`docker-compose.yml` → `cap_add:
+  [SYS_NICE]`) — same as sway before it, ships with `cap_sys_nice=ep` as a file
+  capability, which is not in Docker's default capability set even for a root process;
+  without this, `exec()` fails outright with `Operation not permitted`, not a runtime
+  error.
+- **Config layout** (per `plan.md`'s proposed tree): `config/wm/labwc-rc.xml` →
+  `/etc/xdg/labwc/rc.xml` (window/keybind behavior) and `config/wm/labwc-menu.xml` →
+  `/etc/xdg/labwc/menu.xml` (right-click app menu) in the image. Other `config/*`
+  subdirs (`remote/`, `claude/`) exist but are still empty — no `wayvnc` config file
+  committed, since its password comes from `$VNC_PASSWORD` and `entrypoint.sh` generates
+  `/tmp/wayvnc.cfg` at container start instead (same pattern as the old x11vnc setup:
+  never bake a secret into the image/repo). `config/wm/sway-config` is still present in
+  the repo (unused, kept only as the fallback path if labwc ever needs reverting — see
+  "Window manager" section above).
 - **Host Docker daemon requires a DNS override** to build/run at all on this host —
   `/etc/docker/daemon.json` → `{"dns": ["8.8.8.8"]}` (not project-specific config, outside
   this repo, but necessary to know if things start timing out again). This has been
@@ -238,25 +284,26 @@ fresh `./data/vinegar-config` won't hit the blank-WebView2 bug on its first-ever
   (`1.1.1.1` turned out to be unreachable from this host's containers entirely, dropped).
   Current, correct value is `8.8.8.8` only.
 - **Vinegar/Studio is not auto-started by `entrypoint.sh`** — it's launched manually
-  (over VNC in real use; during development, via `docker exec`). To launch it from a
-  shell, all of these env vars must be set (the ones `entrypoint.sh` itself exports for
-  sway/wayvnc aren't automatically visible to a fresh `docker exec` shell):
+  (over VNC in real use, via the labwc right-click menu's "Roblox Studio (Vinegar)"
+  entry; during development, via `docker exec`). To launch it from a shell, all of these
+  env vars must be set (the ones `entrypoint.sh` itself exports for labwc/wayvnc aren't
+  automatically visible to a fresh `docker exec` shell):
   ```
-  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-1 HOME=/root \
+  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0 HOME=/root \
          DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/xdg-runtime/bus"
   vinegar &
   ```
-  Consider adding `exec vinegar` as a sway autostart line once the project is stable
-  enough that always-launching-Studio-on-boot is actually wanted — not done yet since
-  this was still under active iteration.
+  (Note `wayland-0`, not `wayland-1` — that was sway's socket name, labwc's is
+  different.) Consider adding an autostart mechanism once the project is stable enough
+  that always-launching-Studio-on-boot is actually wanted — not done yet since this was
+  still under active iteration.
 - **Verifying a headless Wayland milestone without a real VNC client**: `docker exec` in,
-  `export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-1; grim /tmp/shot.png`
+  `export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0; grim /tmp/shot.png`
   (`grim` — not in the image by default, install ad hoc with
   `pacman -Sy --needed grim` inside the running container for a one-off check), then
   `docker cp` it out and view it. To test real GPU acceleration specifically, run
   `vkcube` (from `mesa-demos`) the same way — on a broken setup (e.g. the old
   Xvfb/X11 approach) it hard-crashes with "No DRI3 support detected"; on a working one it
-  prints "Selected GPU 0: <real GPU name>" and renders. `swaymsg`/`sway-ipc` commands
-  need `SWAYSOCK` explicitly set (find it via
-  `find /tmp/xdg-runtime -name 'sway-ipc.*.sock'`) — `WAYLAND_DISPLAY` alone isn't
-  enough for sway's own IPC socket, only for Wayland clients.
+  prints "Selected GPU 0: <real GPU name>" and renders. There's no `swaymsg`-equivalent
+  IPC for labwc — use generic Wayland protocol tools instead (`wlr-randr` for output
+  info/resolution, already used by `entrypoint.sh` itself).
