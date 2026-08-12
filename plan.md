@@ -19,10 +19,13 @@ containers/networks.
 **Remaining for a future session**: Milestone 4 (Chrome standalone verify — Chrome
 already demonstrably works as part of the login flow, just not separately confirmed per
 the original narrower scope), Chrome profile persistence (still open, see §5), Rojo
-install/MCP connection setup (genuinely not started), and an explicit camera-rotation
+install/MCP connection setup (genuinely not started), an explicit camera-rotation
 stress-test in a real viewport (the one originally-expected-broken item from the Wayland
 decision — interaction has turned out to work better than that pessimistic baseline, but
-this specific case hasn't been deliberately tried).
+this specific case hasn't been deliberately tried), and — new as of 2026-08-12, see
+Milestone 7 — the actual code-docker-side network attachment and the MCP bridge itself
+(both deliberately deferred; only the network-segmentation *mechanism* was built and
+validated this session, via a self-contained poc, with code-docker's own files untouched).
 
 ## Resolved decisions (were open questions below; keeping them here so they aren't
 re-litigated)
@@ -179,6 +182,26 @@ container actually boots and it's clear what needs to be overridable.
   has been attempted yet. Both are still genuinely manual, GUI-driven steps per the
   original plan; add to `SETUP.md` once actually done once, don't write speculative
   instructions ahead of doing it.
+
+### 7. VNC network segmentation groundwork — done, 2026-08-12
+- Added `VNC_BIND_ALIAS` to `entrypoint.sh` (optional env var; when set, binds wayvnc to
+  that alias's resolved IP instead of `0.0.0.0`; fails closed if it can't resolve) —
+  groundwork for a future integration into `~/Projects/code-docker` where this container
+  would sit on two Docker networks (one for a future MCP bridge, one dedicated to VNC and
+  shared only with a router-like container), and VNC must be unreachable from the other.
+  See CLAUDE.md's "Future code-docker integration" section for the full reasoning.
+- Validated via a new self-contained proof-of-concept, `poc/code-docker-integration/`
+  (mock containers standing in for code-docker's `router`/agent containers, plus the real
+  `roblox-studio` image) — `verify.sh` confirms 4/4: DNS- and TCP-level VNC isolation from
+  the "agent" side, real VNC reachability from the "router" side, and that the shared
+  network itself isn't broken (isolation is VNC-specific, not total).
+- Zero regression to the standalone path: `VNC_BIND_ALIAS` is unset by default in the root
+  `docker-compose.yml`, reproducing today's exact `0.0.0.0` behavior.
+- **Still open / explicitly deferred**: the real code-docker-side attachment (editing
+  code-docker's actual `docker-compose.yml`/networks — separate future task, code-docker
+  itself was deliberately not touched in this pass), and the entire MCP bridge (Roblox's
+  official Studio MCP server + a stdio↔HTTP bridge + wiring code-docker's Claude Code to
+  it) — neither attempted yet.
 
 ## Open questions (resolve before or during implementation, not blocking the plan itself)
 

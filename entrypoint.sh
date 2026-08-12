@@ -12,6 +12,7 @@ export WLR_RENDERER="${WLR_RENDERER:-gles2}"
 
 VNC_PORT="${VNC_PORT:-5900}"
 VNC_PASSWORD="${VNC_PASSWORD:-}"
+VNC_BIND_ALIAS="${VNC_BIND_ALIAS:-}"
 
 # Seed Vinegar's config with webview="" on first run only (never overwrite an existing
 # one — the owner may deliberately change settings later via the GUI). Without this,
@@ -86,7 +87,32 @@ dbus-update-activation-environment --systemd \
   WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS \
   2>/dev/null || true
 
-WAYVNC_ARGS=(--output=HEADLESS-1 0.0.0.0 "${VNC_PORT}")
+# VNC_BIND_ALIAS lets wayvnc bind to one specific Docker network's IP instead of every
+# attached network at once — groundwork for a future code-docker integration where this
+# container sits on two networks (one for a future MCP bridge, one dedicated to VNC and
+# shared only with a router-like container) and VNC must be unreachable from the other.
+# Fails closed (exit 1) rather than silently falling back to 0.0.0.0 on resolution
+# failure — a silent fallback would quietly defeat the whole point of this variable. See
+# CLAUDE.md's "VNC_BIND_ALIAS" section and poc/code-docker-integration/ for the validated
+# reference setup. Unset (the default) reproduces today's exact 0.0.0.0 behavior.
+VNC_BIND_ADDR="0.0.0.0"
+if [[ -n "${VNC_BIND_ALIAS}" ]]; then
+  echo "[entrypoint] VNC_BIND_ALIAS=${VNC_BIND_ALIAS} set — resolving to bind wayvnc there instead of 0.0.0.0"
+  RESOLVED=""
+  for _ in $(seq 1 25); do
+    RESOLVED="$(getent hosts "${VNC_BIND_ALIAS}" 2>/dev/null | awk '{print $1; exit}')"
+    [[ -n "${RESOLVED}" ]] && break
+    sleep 0.2
+  done
+  if [[ -z "${RESOLVED}" ]]; then
+    echo "[entrypoint] FATAL: VNC_BIND_ALIAS=${VNC_BIND_ALIAS} did not resolve via 'getent hosts' — refusing to silently fall back to 0.0.0.0, since that would defeat the network segmentation this variable exists for. Check that this container is actually attached to the network that defines this alias." >&2
+    exit 1
+  fi
+  VNC_BIND_ADDR="${RESOLVED}"
+  echo "[entrypoint] binding wayvnc to ${VNC_BIND_ADDR} (resolved from ${VNC_BIND_ALIAS})"
+fi
+
+WAYVNC_ARGS=(--output=HEADLESS-1 "${VNC_BIND_ADDR}" "${VNC_PORT}")
 if [[ -n "${VNC_PASSWORD}" ]]; then
   WAYVNC_CFG="/tmp/wayvnc.cfg"
   {

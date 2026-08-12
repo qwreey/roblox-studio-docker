@@ -1,0 +1,86 @@
+# Self-contained proof-of-concept for the VNC_BIND_ALIAS network-segmentation mechanism
+# (see ../../entrypoint.sh and ../../CLAUDE.md's "VNC_BIND_ALIAS" section), built and run
+# ENTIRELY within this repo — does not touch code-docker's actual files/networks/
+# containers in any way. It mimics code-docker's relevant network shape:
+#
+#   codedocker-internal-mock  — stands in for code-docker's real `code-docker-internal`
+#                                network (shared with the agent container; future MCP
+#                                bridge + HTTPService egress routing, NOT built here).
+#   vnc-only-mock              — stands in for a NEW dedicated internal-only network
+#                                shared ONLY with code-docker's `router` container, so
+#                                that the agent container (broad/less-trusted input
+#                                surface) can never reach VNC, only a human via router.
+#
+# This mirrors a real, already-fact-checked precedent in code-docker's own git history
+# (commit a2f0420, since reverted for unrelated reasons): a dedicated `internal: true`
+# network + a network alias on the sensitive container + that container's service
+# explicitly binding to the alias's resolved IP (via `getent hosts`) instead of 0.0.0.0.
+#
+# Run:    docker compose up -d --build   (from this directory)
+# Verify: ./verify.sh
+# Down:   docker compose down
+
+services:
+  # Stands in for code-docker's real `router` container — the only container meant to
+  # ever reach VNC. Attached to BOTH networks, same as the real router would be.
+  router-mock:
+    image: archlinux:latest
+    container_name: poc-router-mock
+    command: sleep infinity
+    networks:
+      - codedocker-internal-mock
+      - vnc-only-mock
+
+  # Stands in for code-docker's real Claude Code agent container — the broad,
+  # less-trusted input surface (arbitrary web browsing, npm/pip installs, MCP tool
+  # calls). Attached ONLY to the internal-equivalent network. Must NEVER be able to
+  # resolve or reach VNC — that's the property this whole POC exists to verify.
+  code-docker-mock:
+    image: archlinux:latest
+    container_name: poc-code-docker-mock
+    command: sleep infinity
+    networks:
+      - codedocker-internal-mock
+
+  # The REAL roblox-studio image, built from this repo's own root as build context —
+  # this is the actual thing being validated, using the real production entrypoint.sh
+  # code path (not a toy stand-in). VNC_BIND_ALIAS is the one thing that differs from
+  # the standalone docker-compose.yml at the repo root.
+  roblox-studio:
+    build:
+      context: ../..
+    container_name: poc-roblox-studio
+    # Same as the root docker-compose.yml — needed for labwc's CAP_SYS_NICE requirement
+    # and real GPU accel. Passed through deliberately rather than trying a software
+    # renderer override — see CLAUDE.md's "VNC_BIND_ALIAS" section for why: entrypoint.sh
+    # sets WLR_RENDERER=gles2 unconditionally with no fallback path, and pixman isn't
+    # explicitly installed in the Dockerfile, so relying on a software-render fallback
+    # here would be an unverified assumption that could make the poc fail to boot for a
+    # reason unrelated to what's actually being tested.
+    devices:
+      - /dev/dri:/dev/dri
+    cap_add:
+      - SYS_NICE
+    environment:
+      VNC_PORT: "5900"
+      # Not a real secret — this container is never exposed outside the poc's own
+      # internal networks, and no host port is published. Set only to avoid the
+      # "no authentication" warning noise in logs; irrelevant to what's being tested
+      # (TCP/DNS reachability, not the VNC handshake itself).
+      VNC_PASSWORD: "poc-only-not-a-real-secret"
+      # The mechanism under test: bind wayvnc to this alias's resolved IP on the
+      # vnc-only-mock network instead of 0.0.0.0.
+      VNC_BIND_ALIAS: "roblox-studio-vnc"
+    networks:
+      codedocker-internal-mock:
+        aliases:
+          - roblox-studio
+      vnc-only-mock:
+        aliases:
+          - roblox-studio-vnc
+
+networks:
+  codedocker-internal-mock:
+    internal: true
+  vnc-only-mock:
+    internal: true

@@ -265,6 +265,64 @@ taskbar:
   already has the full architectural analysis (co-location requirement, native-messaging
   mechanics, prior art) — start there rather than re-researching.
 
+## Future code-docker integration — groundwork only, added 2026-08-12
+
+The owner is planning to eventually add this project's Roblox Studio container as a new
+service inside `~/Projects/code-docker` (a separate, much larger infra project — see the
+"standalone" note at the top of this file, which still holds: this project has zero
+build/runtime dependency on code-docker, this section is about code-docker optionally
+*consuming* this project later, not the reverse). The intended shape, confirmed with the
+owner 2026-08-12: this container would join `code-docker-internal` (for a future MCP
+bridge to Roblox Studio's official MCP server, and for routing Studio's `HTTPService`
+calls through code-docker's router) **and** a second, dedicated `internal: true` network
+shared only with code-docker's `router` container, for VNC — so that code-docker's own
+Claude Code agent container (a broad, less-trusted input surface: arbitrary web browsing,
+npm/pip installs, MCP tool calls) can never reach VNC, only a human via router. This
+mirrors a real, fact-checked precedent in code-docker's own git history (commit `a2f0420`,
+`code-docker-forwards` network — since reverted only because the original collision it
+guarded against stopped being possible, not because the mechanism didn't work): a
+dedicated `internal: true` network + a network alias on the sensitive container + that
+container binding its service to the alias's own resolved IP (via `getent hosts`) instead
+of `0.0.0.0`. Docker's network model makes this real L3 segmentation (a container on
+network B has no route to network A's subnet unless also attached to A), not just policy.
+
+**What's actually done here (this project only, nothing in code-docker touched):**
+
+- **`VNC_BIND_ALIAS`** (`entrypoint.sh`, optional env var): when set, resolves via
+  `getent hosts "$VNC_BIND_ALIAS"` and binds wayvnc to that specific IP instead of
+  `0.0.0.0`. **Fails closed** — `exit 1` if the alias never resolves, rather than silently
+  falling back to `0.0.0.0` (a silent fallback would quietly defeat the entire point of
+  the variable). **Unset by default** in the root `docker-compose.yml` (passed through as
+  `VNC_BIND_ALIAS: "${VNC_BIND_ALIAS:-}"`), which reproduces today's exact `0.0.0.0`
+  behavior — zero regression to the working Milestone 1-3 standalone setup.
+- **`poc/code-docker-integration/`**: a self-contained proof-of-concept, entirely within
+  this repo, that mimics code-docker's relevant network shape with two mock `sleep
+  infinity` containers (`router-mock`, `code-docker-mock`) standing in for code-docker's
+  real `router`/agent containers, plus the *real* `roblox-studio` image (built from this
+  repo's own root) with `VNC_BIND_ALIAS` set — validating the actual production
+  `entrypoint.sh` code path, not a toy stand-in. `verify.sh` confirms, via
+  `docker compose exec`: (a) `code-docker-mock` cannot even resolve the VNC-only alias
+  (DNS-level isolation), (b) `code-docker-mock` cannot TCP-connect to the VNC port via the
+  internal-network alias (bind-address isolation — nothing listens there), (c)
+  `router-mock` *can* reach the VNC port via the VNC-only alias (isolation is targeted,
+  not total breakage), (d) `code-docker-mock` can still resolve the plain internal-network
+  alias (the internal network itself isn't broken). Confirmed passing 4/4, 2026-08-12 —
+  see that directory's own compose file for the exact network/alias layout to copy from
+  when the real code-docker-side integration eventually happens.
+
+**Explicitly deferred, not part of this groundwork**: the real code-docker-side
+attachment (editing code-docker's actual `docker-compose.yml`/networks — a separate
+future task, deliberately not done here per the owner's own scope boundary), and the
+entire MCP bridge itself (building/running Roblox's official Studio MCP server, a
+stdio↔HTTP bridge such as `supergateway`, and wiring code-docker's Claude Code to it via
+something like `mcp-remote` or native remote-MCP support — see
+`/home/yaeji/Desktop/research/roblox-mcp.md` for the architecture research behind this,
+done the same day). A dedicated low-privilege Roblox account (not the owner's own) is the
+intended login for whatever eventually runs behind that MCP bridge — mirrors the
+"agent-dedicated git account, separate from the owner's own" principle already documented
+as a recommendation (not yet implemented) in code-docker's own
+`.claude/backlog/agent-sandbox-hardening.md`.
+
 ## Conventions
 
 - **Build/run**: `docker compose build`, then `VNC_PASSWORD=... docker compose up -d`

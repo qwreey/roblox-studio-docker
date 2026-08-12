@@ -23,4 +23,9 @@ services:
     environment:
       VNC_PORT: "5900"
       VNC_PASSWORD: "${VNC_PASSWORD:-}"
+      # Unset by default — see entrypoint.sh's VNC_BIND_ALIAS handling and CLAUDE.md's
+      # "VNC_BIND_ALIAS" section. Only needed when attaching this container to multiple
+      # Docker networks (e.g. a future code-docker integration) and VNC must be bound to
+      # one specific network's IP rather than 0.0.0.0.
+      VNC_BIND_ALIAS: "${VNC_BIND_ALIAS:-}"
     restart: unless-stopped
