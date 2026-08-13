@@ -1,31 +1,33 @@
 # Build plan: Roblox Studio in a standalone Docker container
 
-Status: **Milestones 1, 2, and 3 done — session hand-off point, 2026-08-11.** Headless
-Wayland + wayvnc + real GPU acceleration (verified with a real `vkcube` Vulkan render).
-Vinegar + Roblox Studio + a real account login all working end-to-end, confirmed with a
-full 3D place open and rendering correctly (the built-in Studio Tour's carnival scene,
-real-time GPU-rendered, mouse interaction working over a real VNC client) — see
+Status: **Milestones 1, 2, 3, 7, 8, and 9 done — session hand-off point, 2026-08-13.**
+Headless Wayland + wayvnc + real GPU acceleration (verified with a real `vkcube` Vulkan
+render). Vinegar + Roblox Studio + a real account login all working end-to-end, confirmed
+with a full 3D place open and rendering correctly (the built-in Studio Tour's carnival
+scene, real-time GPU-rendered, mouse interaction working over a real VNC client) — see
 CLAUDE.md's "Milestone 3" section for the five stacked bugs that had to be fixed to get
-there (a second host DNS issue, Vinegar's WebView toggle, the portal/D-Bus chain,
-Chromium's root-sandbox refusal, and Docker's default `/dev/shm` size) — all fixed in the
-actual image/compose config, not ad hoc. Milestone 5 (persistence) also partly done ahead
-of schedule, and Milestone 6 (setup docs) mostly done — see `SETUP.md` for the practical
-build/run/connect/debug guide. Originally derived from `research/99-SYNTHESIS.md`; the
-display-server choice was corrected by empirical testing early on — see CLAUDE.md's
-"Where to start" section for that reasoning, this file just carries the practical
-consequences. Standalone project — no dependency on `code-docker` or any of its
-containers/networks.
+there. Milestone 5 (persistence) also partly done ahead of schedule, and Milestone 6
+(setup docs) mostly done — see `SETUP.md` for the practical build/run/connect/debug guide.
+Since then: the VNC network-segmentation groundwork (Milestone 7), the Studio MCP bridge
+(Milestone 8 — built 2026-08-13, re-verified live this session with a real Luau execution
+through the full published-bridge chain against an actually-open Studio place), and the
+`entrypoint.sh` → `supervisord` process-supervision migration (Milestone 9 — built and
+live-verified this session: killing `labwc` correctly brought the whole container down and
+recovered cleanly, killing the MCP bridge's own process only restarted that one program).
+Originally derived from `research/99-SYNTHESIS.md`; the display-server choice was
+corrected by empirical testing early on — see CLAUDE.md's "Where to start" section for
+that reasoning, this file just carries the practical consequences. Standalone project — no
+dependency on `code-docker` or any of its containers/networks.
 
 **Remaining for a future session**: Milestone 4 (Chrome standalone verify — Chrome
 already demonstrably works as part of the login flow, just not separately confirmed per
 the original narrower scope), Chrome profile persistence (still open, see §5), Rojo
-install/MCP connection setup (genuinely not started), an explicit camera-rotation
-stress-test in a real viewport (the one originally-expected-broken item from the Wayland
-decision — interaction has turned out to work better than that pessimistic baseline, but
-this specific case hasn't been deliberately tried), and — new as of 2026-08-12, see
-Milestone 7 — the actual code-docker-side network attachment and the MCP bridge itself
-(both deliberately deferred; only the network-segmentation *mechanism* was built and
-validated this session, via a self-contained poc, with code-docker's own files untouched).
+install/config (genuinely not started), an explicit camera-rotation stress-test in a real
+viewport (the one originally-expected-broken item from the Wayland decision — interaction
+has turned out to work better than that pessimistic baseline, but this specific case
+hasn't been deliberately tried), and the actual code-docker-side network attachment plus
+wiring code-docker's own Claude Code to the MCP bridge (both deliberately deferred — see
+Milestone 7/8 below; code-docker itself hasn't been touched by any of this project's work).
 
 ## Resolved decisions (were open questions below; keeping them here so they aren't
 re-litigated)
@@ -199,9 +201,40 @@ container actually boots and it's clear what needs to be overridable.
   `docker-compose.yml`, reproducing today's exact `0.0.0.0` behavior.
 - **Still open / explicitly deferred**: the real code-docker-side attachment (editing
   code-docker's actual `docker-compose.yml`/networks — separate future task, code-docker
-  itself was deliberately not touched in this pass), and the entire MCP bridge (Roblox's
-  official Studio MCP server + a stdio↔HTTP bridge + wiring code-docker's Claude Code to
-  it) — neither attempted yet.
+  itself was deliberately not touched in this pass) and wiring code-docker's own Claude
+  Code to the bridge. The MCP bridge itself was originally deferred alongside this but was
+  actually built the next day — see Milestone 8 below.
+
+### 8. Studio MCP bridge — done, 2026-08-13
+- Roblox Studio's built-in MCP server (stdio-only, single-machine by design) bridged out
+  over the network: `supergateway` (stdio↔Streamable HTTP) + `caddy` (bearer-token auth,
+  the only published MCP port) — `config/mcp/mcp-bridge.sh`, `config/mcp/
+  studio-mcp-stdio.sh`, `config/mcp/Caddyfile`. Full walkthrough in `SETUP.md`'s "Studio
+  MCP over the network" section, full bug/architecture record in CLAUDE.md's "Studio MCP
+  bridge" section.
+- **Verified twice, not just built**: once at build time with a real `tools/list` call
+  through the full chain (curl → Caddy → supergateway → `StudioMCP.exe` → Studio's
+  Assistant plugin), and again live in a hand-over check (2026-08-13) with a real Claude
+  Code session executing Luau inside an actually-open Studio place ("Place1") through the
+  published bridge and getting a real result back — confirms the whole chain works for an
+  actual remote MCP client, not just a synthetic curl probe.
+- **Still open / explicitly deferred**: wiring code-docker's own Claude Code to this
+  bridge (a code-docker-side change, out of scope here — see Milestone 7 above) and Rojo
+  install/config (see "Remaining for a future session" above, genuinely not started).
+
+### 9. Process supervision: switched to `supervisord` — done, 2026-08-13
+- `entrypoint.sh`'s hand-rolled `wait -n`/background-job process supervision replaced with
+  `supervisord`, matching code-docker's own `supervisord.conf` + `supervisord.d/*.conf`
+  split — full record in CLAUDE.md's "Process supervision: switched to `supervisord`"
+  section (layout, service-script conventions, the `critical-watchdog` program that
+  replicates the old "container dies if labwc/wayvnc/dbus dies" behavior since supervisord
+  has no built-in equivalent).
+- **Verified live**, not just built: killing `labwc` with `SIGKILL` brought the whole
+  container down and `restart: unless-stopped` cleanly recovered it (confirmed via
+  `RestartCount` and supervisord's own log); killing the `mcp-bridge` wrapper process
+  directly only restarted that one program (supervisord's `autorestart=true`) without
+  touching `dbus`/`labwc`/`wayvnc` or the container's uptime, and the bridge came back
+  healthy within seconds.
 
 ## Open questions (resolve before or during implementation, not blocking the plan itself)
 

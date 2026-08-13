@@ -218,15 +218,18 @@ ELSE" once that process exits, and that's not a risk worth taking on a channel
 
 ### 2. The bridge starts itself — nothing to run manually
 
-`entrypoint.sh` auto-starts `mcp-bridge.sh` in the background whenever `MCP_TOKEN` is set
-(same pattern as `VNC_PASSWORD` gating wayvnc's auth) — as soon as the container is up
-with `MCP_TOKEN` configured in `.env`, the bridge is already listening, independent of
-whether Studio itself has been launched yet (it just waits for Studio's plugin to connect
-once Studio is up). It's also **self-restarting**: if `supergateway` or `caddy` crash,
+supervisord's `mcp-bridge` program starts `mcp-bridge.sh` automatically whenever
+`MCP_TOKEN` is set (same pattern as `VNC_PASSWORD` gating wayvnc's auth) — as soon as the
+container is up with `MCP_TOKEN` configured in `.env`, the bridge is already listening,
+independent of whether Studio itself has been launched yet (it just waits for Studio's
+plugin to connect once Studio is up). If `MCP_TOKEN` isn't set, the program idles instead
+(see CLAUDE.md's "Process supervision: supervisord" section) rather than not starting at
+all — check `docker exec roblox-studio supervisorctl status mcp-bridge` if you're not sure
+which state it's in. It's also **self-restarting**: if `supergateway` or `caddy` crash,
 `mcp-bridge.sh`'s own loop respawns both within ~2s — confirmed by killing `caddy`
 mid-session and watching it come back with fresh PIDs, connection still fully functional
-afterward. Logs land at `/tmp/mcp-bridge.log` inside the container
-(`docker exec roblox-studio tail -f /tmp/mcp-bridge.log`).
+afterward. Logs land at `/var/log/mcp-bridge/stdout.log` inside the container
+(`docker exec roblox-studio tail -f /var/log/mcp-bridge/stdout.log`).
 
 To run it manually instead (e.g. to test a config change without restarting the whole
 container):
@@ -294,18 +297,23 @@ section — this was hard-won, don't rediscover it from scratch):
    config.toml` should show `webview = ""` under `[studio]`. If it's missing or reset,
    Studio's login will show a blank/unusable window instead of the working
    "Login via Browser" fallback.
-3. **Container logs**: `docker compose logs` for compositor/wayvnc-level issues; Vinegar's
-   own log is wherever you redirected its stdout (see "Build & run" above) plus its own
-   deeper per-run log files under `/root/.local/share/vinegar/appdata/Roblox/logs/` inside
-   the container (Roblox Studio's *own* detailed engine log, more informative than
-   Vinegar's wrapper output for login/auth-specific issues).
+3. **Process status**: `docker exec roblox-studio supervisorctl status` — every managed
+   process (`dbus`, `labwc`, `wayvnc`, `mcp-bridge`, `critical-watchdog`) should show
+   `RUNNING`. Per-program logs live at `/var/log/<program>/stdout.log` and `stderr.log`
+   inside the container (e.g. `docker exec roblox-studio tail -f /var/log/labwc/stderr.log`)
+   — see CLAUDE.md's "Process supervision: supervisord" section. `docker compose logs`
+   still shows supervisord's own top-level log line plus everything written before the
+   handoff to it.
 4. **Container stuck in a fast restart loop** (`docker ps` shows `Restarting (1)` every
    couple seconds): see `CLAUDE.md`'s "Crash-loop bug: stale Wayland socket survives
    `docker restart`" section — a known, fixed class of bug (stale `/tmp/xdg-runtime`
-   state surviving a restart). If it's back, that fix likely got reverted.
+   state surviving a restart). If it's back, that fix likely got reverted. Also possible:
+   `critical-watchdog` shutting the container down because `dbus`/`labwc`/`wayvnc`
+   actually failed to start — check `supervisorctl status` and that program's own
+   stderr.log for the real underlying error before assuming it's the stale-socket bug.
 5. **MCP bridge not responding**: `docker exec roblox-studio tail -50
-   /tmp/mcp-bridge.log`. If it's not running at all, confirm `MCP_TOKEN` is actually set
-   in `.env` (the bridge silently doesn't start without it, by design) and that the
+   /var/log/mcp-bridge/stdout.log`. If it's idling instead of running, confirm `MCP_TOKEN`
+   is actually set in `.env` (the bridge idles without it, by design) and that the
    container was recreated (not just left running from before `MCP_TOKEN` was added) —
    see "Studio MCP over the network" below.
 

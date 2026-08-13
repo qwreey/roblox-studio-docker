@@ -335,28 +335,6 @@ habit and get a confusing failure instead).
   here. If this becomes wanted again, `research/04-chrome-in-container-for-claude-mcp.md`
   already has the full architectural analysis (co-location requirement, native-messaging
   mechanics, prior art) — start there rather than re-researching.
-- **Switch process supervision from `entrypoint.sh`'s hand-rolled bash to `supervisord`,
-  matching code-docker's own approach — requested 2026-08-13, explicitly deferred to a
-  fresh session, not to be done in the same session that requested it.** `entrypoint.sh`
-  has grown to juggle too much in one script: D-Bus, labwc, `wlr-randr`, wayvnc
-  (including generating its RSA-AES/TLS credentials inline), and now the MCP bridge
-  auto-start — all hand-supervised via a mix of `wait -n` (for the three processes whose
-  death should kill the container) and a deliberately-excluded background job (the MCP
-  bridge, which self-restarts on its own instead, see "Studio MCP bridge" above). The
-  owner wants this replaced with `supervisord`, the same tool code-docker already uses —
-  reasoning given: simpler than hand-rolled `wait -n` process-group logic, and splitting
-  each responsibility into its own program entry makes both debugging (`supervisorctl
-  status`/`tail` per-process instead of one merged log stream) and future changes easier.
-  **Before starting this**: read code-docker's actual `supervisord.conf`
-  (or equivalent) to match its conventions rather than inventing a new pattern — its
-  exact location wasn't looked up as part of queuing this item, don't assume a path.
-  Scope likely includes: a `[program:]` entry per current backgrounded process (dbus,
-  labwc, wayvnc, mcp-bridge — Vinegar/Studio itself may or may not move in, given it's
-  deliberately manual/interactive today, see "Conventions" below), preserving the
-  existing behaviors that matter (container exits if labwc/wayvnc/dbus die, MCP bridge
-  does NOT take the container down if it dies, wayvnc's cert-generation and
-  `VNC_BIND_ALIAS` resolution logic still need to run before wayvnc itself starts).
-
 ## Future code-docker integration — groundwork only, added 2026-08-12
 
 The owner is planning to eventually add this project's Roblox Studio container as a new
@@ -452,6 +430,61 @@ touching again:
   logged immediately on startup is just that self-connect racing its own listener binding
   and retrying ~1.4s later, not a real failure.
 
+## Process supervision: switched to `supervisord` — 2026-08-13
+
+`entrypoint.sh` used to hand-supervise everything itself: background labwc/wayvnc/dbus,
+`wait -n` on just those three (container dies if any one of them dies), plus a
+deliberately-excluded background job for the MCP bridge (self-restarting on its own, must
+never take the container down with it). This grew fragile as more pieces got added and
+was replaced with `supervisord`, matching code-docker's own approach (its
+`config/supervisord.default.conf` + `config/supervisord.d/*.conf` split was read first and
+copied here, per the standing instruction to match its conventions rather than inventing a
+new pattern) — see [[feedback-process-supervision]] in memory for the standing preference
+behind this. `entrypoint.sh` is now just the one-time setup that has to happen before anything
+starts (wiping `/tmp/xdg-runtime`, exporting `WLR_*`/`DBUS_SESSION_BUS_ADDRESS`, seeding
+Vinegar's config) and ends with `exec supervisord -n -c /etc/roblox-studio/supervisord.conf`.
+
+- **Layout**: `config/supervisord.conf` (top-level config, `[include]`s
+  `config/supervisord.d/*.conf`) → `/etc/roblox-studio/supervisord.conf` +
+  `/etc/roblox-studio/supervisord.d/`. One `[program:...]` file per process there
+  (`dbus.conf`, `labwc.conf`, `wayvnc.conf`, `mcp-bridge.conf`, `critical-watchdog.conf`).
+  No gitignored user-override glob like code-docker's second `[include]` entry — this
+  project doesn't have a config-override mechanism anywhere else either, so one glob is
+  enough; don't add a second one speculatively.
+- **Service scripts**: `config/supervisor/*-service.sh` →
+  `/etc/roblox-studio/*-service.sh`, one per program, plus a shared
+  `wait-for-wayland.sh` helper (sourced, not exec'd) that both `labwc-service.sh`'s
+  post-start step and `wayvnc-service.sh` use independently — supervisord runs every
+  program as its own process with no shared mutable state between them, unlike the old
+  single flat `entrypoint.sh` script, so "wait for labwc's socket, export
+  `WAYLAND_DISPLAY`" had to become something each dependent script does for itself rather
+  than something set once and inherited. Every service script either ends in `exec` (so
+  supervisord's stop signal reaches the real daemon directly, no wrapper shell left in
+  between — `dbus-service.sh`, `wayvnc-service.sh`, the `labwc`/`labwc` line at the end of
+  `labwc-service.sh`) or, when it has to keep running as bash itself (the MCP bridge's
+  idle-when-`MCP_TOKEN`-unset branch), installs an explicit `trap ... TERM INT` — same
+  idiom code-docker's own `dns-local.default.sh` uses for its NETGATE-disabled idle
+  branch. `mcp-bridge.sh` itself (unchanged) already had good TERM/INT trap handling of
+  its own supergateway/caddy children — this migration only added the idle-gate wrapper
+  around it, `config/supervisor/mcp-bridge-service.sh`.
+- **Container-dies-if-a-critical-process-dies, replicated without `wait -n`**: supervisord
+  itself has no built-in "shut the whole stack down if program X exits" directive, so
+  `critical-watchdog.conf`/`critical-watchdog-service.sh` polls `supervisorctl status` for
+  `dbus`/`labwc`/`wayvnc` every 2s (after an initial 5s startup grace period, so it
+  doesn't false-positive on their normal STARTING window) and calls `supervisorctl
+  shutdown` the moment any of them isn't `RUNNING`/`STARTING` — that brings down
+  supervisord itself, which is `entrypoint.sh`'s `exec` target, i.e. the container's PID 1,
+  reproducing the old `wait -n` behavior. Those three programs have `autorestart=false` +
+  `startretries=0` so a first failure surfaces to the watchdog immediately rather than
+  being quietly retried first. The MCP bridge is deliberately **not** in the watchdog's
+  list — same "must never take the container down" requirement as before, now expressed
+  as just not being on the polled list rather than not being in a `wait -n` set.
+- **Debugging**: `docker exec roblox-studio supervisorctl status` shows every program's
+  state at a glance. Per-program logs at `/var/log/<program>/stdout.log` and
+  `stderr.log` inside the container (pre-created in the `Dockerfile` — supervisord does
+  not create a logfile's parent directory itself, same reason code-docker's own
+  `Dockerfile` pre-creates its `/var/log/<program>` dirs too).
+
 ## Conventions
 
 - **Build/run**: `docker compose build`, then `VNC_PASSWORD=... docker compose up -d`
@@ -459,15 +492,13 @@ touching again:
   `docker-compose.yml`, image built from the root `Dockerfile`. VNC published on host
   port 5900 (override via `VNC_PORT`).
 - **Base image**: `archlinux:latest` (matches host/owner's other infra). Milestones are
-  added as straight-line layers in `Dockerfile` + startup logic in `entrypoint.sh` — no
-  supervisord/multi-process-manager layer yet; `entrypoint.sh` backgrounds each core
-  process (labwc, wayvnc, dbus) and `wait -n`s on **just those three**, so the container
-  dies if any one of them dies. Revisit this if the process count grows enough to make
-  that fragile (e.g. once Vinegar/Chrome are added). The Studio MCP bridge
-  (`mcp-bridge.sh`, see its own section above) is a deliberate exception — it's
-  backgrounded too but excluded from that `wait -n` set, since it's non-critical and
-  already self-restarting on its own; a bridge crash must never take the whole container
-  (and Studio's actual session) down with it.
+  added as straight-line layers in `Dockerfile`. Process supervision is `supervisord`'s
+  job (see "Process supervision: switched to `supervisord`" above) — `entrypoint.sh` only
+  does one-time setup and then `exec`s into it. dbus/labwc/wayvnc take the container down
+  if any one of them dies (via `critical-watchdog`, see above); the Studio MCP bridge
+  (`mcp-bridge.sh`, see its own section above) is a deliberate exception — non-critical
+  and already self-restarting on its own, must never take the whole container (and
+  Studio's actual session) down with it.
 - **Display server: `labwc` (headless) + `wayvnc`, not Xvfb/X11** — see the "Where to
   start" section above for the X11-vs-Wayland reasoning, and "Window manager: `labwc`,
   not `sway`" above for why labwc specifically (was sway through Milestone 3, switched

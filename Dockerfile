@@ -41,6 +41,7 @@ RUN pacman -Syu --noconfirm --needed \
       nodejs \
       npm \
       caddy \
+      supervisor \
     && pacman -Scc --noconfirm \
     && rm -rf /var/cache/pacman/pkg/*
 
@@ -88,6 +89,24 @@ COPY config/mcp/Caddyfile /etc/mcp-bridge/Caddyfile
 COPY config/mcp/mcp-bridge.sh /usr/local/bin/mcp-bridge.sh
 COPY config/mcp/studio-mcp-stdio.sh /usr/local/bin/studio-mcp-stdio.sh
 RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh
+
+# Process supervision: supervisord — see CLAUDE.md's "Process supervision: supervisord"
+# section. One [program:...] file per process (config/supervisord.d/) plus each
+# program's own service script (config/supervisor/), same split code-docker itself uses.
+# Log directories are pre-created here because supervisord does not create the parent
+# directory for a stdout_logfile/stderr_logfile path itself — matches code-docker's own
+# Dockerfile, which does the same for the same reason.
+RUN mkdir -p /etc/roblox-studio/supervisord.d \
+      /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/mcp-bridge /var/log/critical-watchdog
+COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
+COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
+COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
+COPY config/supervisor/dbus-service.sh /etc/roblox-studio/dbus-service.sh
+COPY config/supervisor/labwc-service.sh /etc/roblox-studio/labwc-service.sh
+COPY config/supervisor/wayvnc-service.sh /etc/roblox-studio/wayvnc-service.sh
+COPY config/supervisor/mcp-bridge-service.sh /etc/roblox-studio/mcp-bridge-service.sh
+COPY config/supervisor/critical-watchdog-service.sh /etc/roblox-studio/critical-watchdog-service.sh
+RUN chmod +x /etc/roblox-studio/*-service.sh
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
