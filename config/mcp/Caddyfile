@@ -1,0 +1,16 @@
+# Fronts supergateway's stdio<->Streamable-HTTP bridge (loopback-only, see mcp-bridge.sh)
+# with bearer-token auth. This is the ONLY MCP-related port meant to be published from
+# the container — supergateway itself binds every interface with no auth of its own
+# (research/roblox-mcp.md §5.2), so Caddy is what actually gates access; never publish
+# MCP_UPSTREAM_PORT directly.
+{
+	auto_https off
+	admin off
+}
+
+:{$MCP_PORT} {
+	@unauthorized not header Authorization "Bearer {$MCP_TOKEN}"
+	respond @unauthorized "unauthorized" 401
+
+	reverse_proxy 127.0.0.1:{$MCP_UPSTREAM_PORT}
+}

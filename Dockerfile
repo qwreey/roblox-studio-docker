@@ -38,6 +38,9 @@ RUN pacman -Syu --noconfirm --needed \
       grim \
       waybar \
       wofi \
+      nodejs \
+      npm \
+      caddy \
     && pacman -Scc --noconfirm \
     && rm -rf /var/cache/pacman/pkg/*
 
@@ -81,9 +84,14 @@ RUN chmod +x /etc/xdg/labwc/autostart
 RUN printf '[Desktop Entry]\nVersion=1.0\nName=Terminal\nExec=foot\nTerminal=false\nIcon=utilities-terminal\nType=Application\nCategories=System;TerminalEmulator;\n' \
       > /usr/share/applications/foot.desktop
 
+COPY config/mcp/Caddyfile /etc/mcp-bridge/Caddyfile
+COPY config/mcp/mcp-bridge.sh /usr/local/bin/mcp-bridge.sh
+COPY config/mcp/studio-mcp-stdio.sh /usr/local/bin/studio-mcp-stdio.sh
+RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 5900
+EXPOSE 5900 8787
 
 ENTRYPOINT ["/entrypoint.sh"]

@@ -5,6 +5,7 @@ services:
     container_name: roblox-studio
     ports:
       - "${VNC_PORT:-5900}:5900"
+      - "${MCP_PORT:-8787}:8787"
     devices:
       - /dev/dri:/dev/dri
     cap_add:
@@ -20,6 +21,9 @@ services:
       - ./data/vinegar-data:/root/.local/share/vinegar
       - ./data/vinegar-config:/root/.config/vinegar
       - ./data/vinegar-cache:/root/.cache/vinegar
+      # wayvnc's RSA-AES key + self-signed VeNCrypt/TLS cert (see entrypoint.sh) — kept
+      # stable across restarts so clients don't see a "host key changed" warning.
+      - ./data/wayvnc:/root/.config/wayvnc
     environment:
       VNC_PORT: "5900"
       VNC_PASSWORD: "${VNC_PASSWORD:-}"
@@ -28,4 +32,12 @@ services:
       # Docker networks (e.g. a future code-docker integration) and VNC must be bound to
       # one specific network's IP rather than 0.0.0.0.
       VNC_BIND_ALIAS: "${VNC_BIND_ALIAS:-}"
+      # MCP bridge (mcp-bridge.sh) — NOT auto-started by entrypoint.sh, see that script's
+      # own header comment and SETUP.md's "Studio MCP over the network" section. MCP_PORT
+      # here is the fixed container-internal Caddy listen port (mirrors the VNC_PORT
+      # pattern above) — override the host-side port via the ports mapping's
+      # ${MCP_PORT:-8787} instead, not this value.
+      MCP_PORT: "8787"
+      MCP_TOKEN: "${MCP_TOKEN:-}"
+      STUDIO_MCP_STDIO_CMD: "${STUDIO_MCP_STDIO_CMD:-}"
     restart: unless-stopped

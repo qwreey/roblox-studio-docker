@@ -3,6 +3,17 @@ set -euo pipefail
 
 export HOME="${HOME:-/root}"
 export XDG_RUNTIME_DIR="/tmp/xdg-runtime"
+# `docker restart` (including the automatic restart from `restart: unless-stopped`)
+# reuses the same container writable layer — /tmp is NOT wiped between restarts, only
+# the process/PID namespace is fresh. If labwc previously died (crash, OOM, a GPU
+# driver hiccup — anything), a stale wayland-N socket/.lock file from that old process
+# is still sitting here. The socket-detection loop below finds *a* file matching
+# `wayland-*` and declares the compositor up without checking it's actually backed by a
+# live server — a stale file satisfies that check instantly, before the new labwc has
+# created its own socket, so wlr-randr/wayvnc immediately fail to connect and the
+# container crash-loops forever (every restart re-finds the same stale file in ~0.2s).
+# Wipe it on every start so only a genuinely fresh labwc's socket can be found here.
+rm -rf "${XDG_RUNTIME_DIR}"
 mkdir -p "${XDG_RUNTIME_DIR}"
 chmod 700 "${XDG_RUNTIME_DIR}"
 
@@ -115,10 +126,34 @@ fi
 WAYVNC_ARGS=(--output=HEADLESS-1 "${VNC_BIND_ADDR}" "${VNC_PORT}")
 if [[ -n "${VNC_PASSWORD}" ]]; then
   WAYVNC_CFG="/tmp/wayvnc.cfg"
+
+  # wayvnc can advertise multiple RFB security types at once and let each client pick
+  # whichever it supports, rather than only one — so generate credentials for both
+  # RSA-AES (wayvnc's own default scheme; TigerVNC's vncviewer speaks it natively) and
+  # VeNCrypt/TLS (a self-signed cert — much more broadly supported, e.g. by Remmina,
+  # which doesn't implement RSA-AES and fails with "unknown authentication scheme"
+  # against it alone). Persisted under /root/.config/wayvnc (./data/wayvnc volume) so
+  # the RSA-AES TOFU fingerprint and TLS cert stay stable across restarts — regenerating
+  # them every start would trip every client's "host key changed" warning each time.
+  WAYVNC_KEYDIR="${HOME}/.config/wayvnc"
+  mkdir -p "${WAYVNC_KEYDIR}"
+  RSA_KEY="${WAYVNC_KEYDIR}/rsa_key.pem"
+  TLS_KEY="${WAYVNC_KEYDIR}/tls_key.pem"
+  TLS_CERT="${WAYVNC_KEYDIR}/tls_cert.pem"
+  [[ -f "${RSA_KEY}" ]] || ssh-keygen -m pem -f "${RSA_KEY}" -t rsa -N "" -q
+  if [[ ! -f "${TLS_KEY}" || ! -f "${TLS_CERT}" ]]; then
+    openssl req -x509 -newkey rsa:2048 -keyout "${TLS_KEY}" -out "${TLS_CERT}" \
+      -days 3650 -nodes -subj "/CN=roblox-studio" 2>/dev/null
+  fi
+  chmod 600 "${RSA_KEY}" "${TLS_KEY}"
+
   {
     echo "enable_auth=true"
     echo "username=studio"
     echo "password=${VNC_PASSWORD}"
+    echo "rsa_private_key_file=${RSA_KEY}"
+    echo "private_key_file=${TLS_KEY}"
+    echo "certificate_file=${TLS_CERT}"
   } > "${WAYVNC_CFG}"
   chmod 600 "${WAYVNC_CFG}"
   WAYVNC_ARGS=(-C "${WAYVNC_CFG}" "${WAYVNC_ARGS[@]}")
@@ -129,5 +164,22 @@ fi
 echo "[entrypoint] starting wayvnc on port ${VNC_PORT}"
 wayvnc "${WAYVNC_ARGS[@]}" &
 VNC_PID=$!
+
+# Studio MCP bridge (mcp-bridge.sh) — auto-started whenever MCP_TOKEN is set (matches
+# the pattern above: VNC_PASSWORD gates wayvnc's auth, MCP_TOKEN gates this). Unlike
+# Vinegar/Studio, nothing here strictly requires Studio to already be running —
+# supergateway/caddy come up regardless, and Studio's plugin just connects whenever
+# Studio itself is later launched — so there's no reason to keep this manual once a
+# token is configured. Deliberately NOT included in the `wait -n` set below: a crash in
+# the bridge (which self-restarts internally anyway, see mcp-bridge.sh) should never take
+# down labwc/wayvnc/Studio. Still reaped correctly on container shutdown via the `trap
+# cleanup EXIT` at the top of this script, which kills every backgrounded job including
+# this one. See SETUP.md's "Studio MCP over the network" section.
+if [[ -n "${MCP_TOKEN:-}" ]]; then
+  echo "[entrypoint] MCP_TOKEN is set — starting the Studio MCP bridge in the background"
+  /usr/local/bin/mcp-bridge.sh > /tmp/mcp-bridge.log 2>&1 &
+else
+  echo "[entrypoint] MCP_TOKEN not set — Studio MCP bridge not started (see SETUP.md's 'Studio MCP over the network' section)"
+fi
 
 wait -n "${WM_PID}" "${VNC_PID}" "${DBUS_PID}"

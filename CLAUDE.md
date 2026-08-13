@@ -233,6 +233,77 @@ taskbar:
   focus/select-only). Real VNC clients handle this fine (a normal double-click); only
   scripted single-click-based test tooling needs to account for it.
 
+## Crash-loop bug: stale Wayland socket survives `docker restart` — fixed 2026-08-12
+
+If the container ever gets into a tight restart loop with logs like `labwc is up on
+WAYLAND_DISPLAY=wayland-0` immediately followed by `wlr-randr failed to set output mode`
+and wayvnc's `Failed to connect to WAYLAND_DISPLAY` — this is the bug, not a new one.
+Root cause: `docker restart` (including the automatic restart from `restart:
+unless-stopped`, which is what actually triggered this) reuses the **same container
+writable layer** — only the PID namespace is fresh, `/tmp` is not wiped. If labwc ever
+dies for any reason (a GPU driver hiccup from something else hammering `/dev/dri`
+concurrently — in the one confirmed case, Vinegar/Studio actually running — is one
+plausible trigger, but the bug is in what happens *next*, not in whatever kills labwc
+the first time), its old `wayland-0`/`wayland-0.lock` socket files are left behind in
+`/tmp/xdg-runtime`. `entrypoint.sh`'s socket-detection loop just checks *a file matching
+`wayland-*` exists* — a stale leftover satisfies that instantly, before the new labwc
+process has created its own live socket, so every downstream client (`wlr-randr`,
+`wayvnc`) immediately fails to connect against the dead file. Since the stale file
+persists across restarts (same writable layer), **every subsequent restart re-triggers
+the same failure in under a second, forever** — the container never recovers on its own
+once this starts. Confirmed via `find`/timestamp comparison inside a live-but-crashing
+container: `wayland-0`/`wayland-0.lock` had timestamps from an earlier run while `bus`
+(dbus, recreated correctly by `entrypoint.sh` each start) had the current run's
+timestamp. **Fix**: `entrypoint.sh` now does `rm -rf "${XDG_RUNTIME_DIR}"` before
+`mkdir -p` at the very top, so no state from a previous crashed run can survive into the
+next start. If this loop reappears, check whether that `rm -rf` line got reverted before
+re-diagnosing from scratch. Recovery from an already-wedged container (pre-fix, or if a
+future bug reintroduces this class of problem): `docker compose up -d --build` to force
+recreation with a rebuilt image is *not* actually required — a plain `docker rm -f` +
+`docker compose up -d` (full container recreation, not just `restart`) also clears it,
+since recreation gets a fresh writable layer; rebuilding was done here anyway because
+the fix itself lives in the image.
+
+## VNC client compatibility: wayvnc needs both VeNCrypt and RSA-AES offered — fixed 2026-08-12
+
+Setting only `enable_auth`/`username`/`password` in wayvnc's config (the original
+Milestone 1 setup) makes wayvnc advertise **RSA-AES only** (RFB security types 129 and
+5, confirmed via a raw handshake probe: `python3` connecting and reading the server's
+security-type list directly). This is wayvnc's own default secure scheme and is exactly
+what TigerVNC's `vncviewer` expects, but most other VNC clients don't implement it —
+Remmina fails outright with "unknown authentication scheme". **Fix**: `entrypoint.sh` now
+also generates a self-signed VeNCrypt/TLS cert (`openssl req -x509 ...`) alongside the
+RSA-AES key (`ssh-keygen -m pem ...`), and sets all three of `rsa_private_key_file`,
+`private_key_file`, `certificate_file` in wayvnc's config — wayvnc can advertise multiple
+security types at once and let each client pick whichever it supports (confirmed:
+handshake probe now shows types `[19, 129, 5]` — 19 is VeNCrypt). Both key/cert pairs are
+persisted under `./data/wayvnc` (new volume) specifically so the RSA-AES TOFU fingerprint
+and TLS cert stay stable across restarts — regenerating them every start would trip every
+client's "host key changed" warning each time.
+
+**Client compatibility — be precise about what's actually confirmed vs. inferred**:
+**Remmina fails, confirmed directly** — first against RSA-AES alone ("unknown
+authentication scheme"), then again after adding VeNCrypt (its X.509 handling wants a CA
+file through a file-picker dialog rather than a plain accept/reject prompt, and this did
+not end up working even with the self-signed cert supplied as its own CA — tried on both
+the Flatpak and a description of native-package behavior). **A successful connection was
+independently confirmed by the owner** using some other client (described as clicking
+"OK" after seeing the self-signed cert's hash — consistent with GNOME's remote-desktop
+client UX) — that client's exact identity was never pinned down (the owner referenced
+`grdctl`, which is actually GNOME Remote Desktop's *server*-side config CLI, not a VNC
+viewer, so treat this as "some other client worked," not a confirmed specific
+recommendation). **TigerVNC's `vncviewer` was reasoned about but never actually
+connection-tested**: confirmed wayvnc offers the right security types for it (raw RFB
+handshake probe: types `[19, 129, 5]`) and confirmed the Flatpak build
+(`org.tigervnc.vncviewer`) has the right sandbox permissions (`shared=network`), but no
+one actually ran it against this server and watched it succeed — don't repeat "TigerVNC
+is confirmed working" as fact without actually testing it first. If Remmina trouble comes
+up again: don't sink more time into it specifically, it's a demonstrated
+client-compatibility gap, not a misconfiguration on this side — try TigerVNC or whatever
+client the owner already had success with. Username for any client is **`studio`**
+(hardcoded, unrelated to the container's `root` OS user — easy to reach for `root` by
+habit and get a confusing failure instead).
+
 ## Key constraints to keep in mind while building
 
 - **GPU is a hard requirement, not a nice-to-have**, for Roblox Studio's DXVK/native-Vulkan
@@ -264,6 +335,27 @@ taskbar:
   here. If this becomes wanted again, `research/04-chrome-in-container-for-claude-mcp.md`
   already has the full architectural analysis (co-location requirement, native-messaging
   mechanics, prior art) — start there rather than re-researching.
+- **Switch process supervision from `entrypoint.sh`'s hand-rolled bash to `supervisord`,
+  matching code-docker's own approach — requested 2026-08-13, explicitly deferred to a
+  fresh session, not to be done in the same session that requested it.** `entrypoint.sh`
+  has grown to juggle too much in one script: D-Bus, labwc, `wlr-randr`, wayvnc
+  (including generating its RSA-AES/TLS credentials inline), and now the MCP bridge
+  auto-start — all hand-supervised via a mix of `wait -n` (for the three processes whose
+  death should kill the container) and a deliberately-excluded background job (the MCP
+  bridge, which self-restarts on its own instead, see "Studio MCP bridge" above). The
+  owner wants this replaced with `supervisord`, the same tool code-docker already uses —
+  reasoning given: simpler than hand-rolled `wait -n` process-group logic, and splitting
+  each responsibility into its own program entry makes both debugging (`supervisorctl
+  status`/`tail` per-process instead of one merged log stream) and future changes easier.
+  **Before starting this**: read code-docker's actual `supervisord.conf`
+  (or equivalent) to match its conventions rather than inventing a new pattern — its
+  exact location wasn't looked up as part of queuing this item, don't assume a path.
+  Scope likely includes: a `[program:]` entry per current backgrounded process (dbus,
+  labwc, wayvnc, mcp-bridge — Vinegar/Studio itself may or may not move in, given it's
+  deliberately manual/interactive today, see "Conventions" below), preserving the
+  existing behaviors that matter (container exits if labwc/wayvnc/dbus die, MCP bridge
+  does NOT take the container down if it dies, wayvnc's cert-generation and
+  `VNC_BIND_ALIAS` resolution logic still need to run before wayvnc itself starts).
 
 ## Future code-docker integration — groundwork only, added 2026-08-12
 
@@ -312,16 +404,53 @@ network B has no route to network A's subnet unless also attached to A), not jus
 
 **Explicitly deferred, not part of this groundwork**: the real code-docker-side
 attachment (editing code-docker's actual `docker-compose.yml`/networks — a separate
-future task, deliberately not done here per the owner's own scope boundary), and the
-entire MCP bridge itself (building/running Roblox's official Studio MCP server, a
-stdio↔HTTP bridge such as `supergateway`, and wiring code-docker's Claude Code to it via
-something like `mcp-remote` or native remote-MCP support — see
-`/home/yaeji/Desktop/research/roblox-mcp.md` for the architecture research behind this,
-done the same day). A dedicated low-privilege Roblox account (not the owner's own) is the
-intended login for whatever eventually runs behind that MCP bridge — mirrors the
+future task, deliberately not done here per the owner's own scope boundary). The MCP
+bridge itself was originally deferred alongside it but was actually built the next day —
+see "Studio MCP bridge" below; what's *still* deferred is wiring code-docker's own Claude
+Code to it (that's a code-docker-side change, out of scope here for the same reason as
+the network attachment). A dedicated low-privilege Roblox account (not the owner's own)
+is the intended login for whatever eventually runs behind that MCP bridge — mirrors the
 "agent-dedicated git account, separate from the owner's own" principle already documented
 as a recommendation (not yet implemented) in code-docker's own
 `.claude/backlog/agent-sandbox-hardening.md`.
+
+## Studio MCP bridge — built and verified end-to-end, 2026-08-13
+
+Roblox Studio's built-in MCP server (Assistant > "Manage MCP Servers") is stdio-only and
+single-machine by design (see `research/roblox-mcp.md`). `supergateway` (stdio↔Streamable
+HTTP) + `caddy` (bearer-token auth, the only published MCP port) now bridge it out —
+`config/mcp/mcp-bridge.sh`, `config/mcp/studio-mcp-stdio.sh`, `config/mcp/Caddyfile`, full
+walkthrough in `SETUP.md`'s "Studio MCP over the network" section. Auto-started by
+`entrypoint.sh` whenever `MCP_TOKEN` is set (added 2026-08-13, after the initial build —
+unlike Vinegar/Studio, nothing about the bridge itself requires Studio to already be
+running, so there was no reason to keep it manual once proven stable) and
+self-restarting on crash (`mcp-bridge.sh`'s own loop, not part of `entrypoint.sh`'s core
+`wait -n` set — a bridge crash must never take down labwc/wayvnc/Studio). Confirmed by
+killing `caddy` mid-session and watching both processes respawn within ~2s with the
+connection still fully functional afterward. Two more things worth knowing if this needs
+touching again:
+
+- **`StudioMCP.exe` is invoked directly, not through the `mcp.bat` launcher Studio
+  generates** (the path Roblox's own docs point Windows/macOS MCP clients at,
+  `%LOCALAPPDATA%\Roblox\mcp.bat`). That `.bat`'s if/else has a real cmd.exe batch bug —
+  `else` sits on its own line instead of the same line as the preceding `)`, which
+  cmd.exe's parser requires. Confirmed by direct testing: it still runs `StudioMCP.exe`
+  fine on the common path (the hardcoded version folder exists), but throws a stray
+  "Syntax error: unexpected ELSE" once that process exits and control returns to the
+  batch script. Not a risk worth taking on a channel `supergateway` parses as
+  newline-delimited JSON-RPC. `studio-mcp-stdio.sh` gets `mcp.bat`'s one genuinely useful
+  property (surviving a Vinegar/Studio version bump — Vinegar prunes old
+  `versions/version-*` folders on update, per Milestone 3's install log) by globbing for
+  the current version folder itself, without going through cmd.exe at all.
+- **Verified with a real `tools/list` call, not just a handshake**: `curl` through Caddy's
+  bearer-token gate → supergateway → `studio-mcp-stdio.sh` → `StudioMCP.exe` → WebSocket →
+  Studio's own Assistant plugin returned genuine Studio-specific tools (`upload_image`,
+  `search_game_tree`, etc.) — confirms the whole chain, not just that the proxy process
+  starts. `StudioMCP.exe`'s own architecture is worth knowing if debugging this again: it
+  hosts a WS server *and* connects to it as a client itself (self-loop) rather than the
+  Studio plugin connecting directly — a "WS host connection error: Connection refused"
+  logged immediately on startup is just that self-connect racing its own listener binding
+  and retrying ~1.4s later, not a real failure.
 
 ## Conventions
 
@@ -331,10 +460,14 @@ as a recommendation (not yet implemented) in code-docker's own
   port 5900 (override via `VNC_PORT`).
 - **Base image**: `archlinux:latest` (matches host/owner's other infra). Milestones are
   added as straight-line layers in `Dockerfile` + startup logic in `entrypoint.sh` — no
-  supervisord/multi-process-manager layer yet; `entrypoint.sh` backgrounds each process
-  and `wait -n`s on them so the container dies if any one of them dies. Revisit this if
-  the process count grows enough to make that fragile (e.g. once Vinegar/Chrome are
-  added).
+  supervisord/multi-process-manager layer yet; `entrypoint.sh` backgrounds each core
+  process (labwc, wayvnc, dbus) and `wait -n`s on **just those three**, so the container
+  dies if any one of them dies. Revisit this if the process count grows enough to make
+  that fragile (e.g. once Vinegar/Chrome are added). The Studio MCP bridge
+  (`mcp-bridge.sh`, see its own section above) is a deliberate exception — it's
+  backgrounded too but excluded from that `wait -n` set, since it's non-critical and
+  already self-restarting on its own; a bridge crash must never take the whole container
+  (and Studio's actual session) down with it.
 - **Display server: `labwc` (headless) + `wayvnc`, not Xvfb/X11** — see the "Where to
   start" section above for the X11-vs-Wayland reasoning, and "Window manager: `labwc`,
   not `sway`" above for why labwc specifically (was sway through Milestone 3, switched
