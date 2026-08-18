@@ -19,15 +19,15 @@ corrected by empirical testing early on — see CLAUDE.md's "Where to start" sec
 that reasoning, this file just carries the practical consequences. Standalone project — no
 dependency on `code-docker` or any of its containers/networks.
 
-**Remaining for a future session**: Milestone 4 (Chrome standalone verify — Chrome
-already demonstrably works as part of the login flow, just not separately confirmed per
-the original narrower scope), Chrome profile persistence (still open, see §5), Rojo
-install/config (genuinely not started), an explicit camera-rotation stress-test in a real
-viewport (the one originally-expected-broken item from the Wayland decision — interaction
-has turned out to work better than that pessimistic baseline, but this specific case
-hasn't been deliberately tried), and the actual code-docker-side network attachment plus
-wiring code-docker's own Claude Code to the MCP bridge (both deliberately deferred — see
-Milestone 7/8 below; code-docker itself hasn't been touched by any of this project's work).
+**Remaining for a future session**: Chrome profile persistence (still open, see §5 —
+deliberately deferred, not currently needed), Rojo install/config (genuinely not
+started), an explicit camera-rotation stress-test in a real viewport (the one
+originally-expected-broken item from the Wayland decision — interaction has turned out
+to work better than that pessimistic baseline, but this specific case hasn't been
+deliberately tried), and the actual code-docker-side network attachment plus wiring
+code-docker's own Claude Code to the MCP bridge (both deliberately deferred — see
+Milestone 7/8 below; code-docker itself hasn't been touched by any of this project's
+work). Milestone 4 (Chrome standalone verify) done as of 2026-08-13 — see below.
 
 ## Resolved decisions (were open questions below; keeping them here so they aren't
 re-litigated)
@@ -147,7 +147,7 @@ container actually boots and it's clear what needs to be overridable.
   separately verified — only the dashboard has been tested so far, not an actual
   place/experience's 3D viewport.
 
-### 4. Chrome
+### 4. Chrome — DONE, 2026-08-13
 - Install a real Chrome/Chromium (not headless) — Chrome's Ozone/Wayland backend
   auto-detects and uses native Wayland by default (Chrome 140+, per `research/03` §4),
   no XWayland needed for Chrome specifically.
@@ -157,9 +157,16 @@ container actually boots and it's clear what needs to be overridable.
   "Backlog / explicitly deferred" section for why (short version: Claude-in-Chrome can't
   be driven remotely, only from a co-located Claude Code process, and the owner has
   confirmed that's not a goal here for now).
-- Arrange window layout (sway config) so Studio + Chrome are both visible/usable
-  side-by-side, or use sway keybindings to switch between them — whichever is less
-  fiddly in practice once both are actually running.
+- **Confirmed 2026-08-13**, separately from the login-flow usage this already got
+  incidentally in Milestone 3: launched `chromium --no-sandbox
+  --ozone-platform=wayland https://example.com` by hand against the already-running
+  container (labwc, not sway — the WM had already switched by the time this milestone
+  was actually revisited), captured via `grim`. Real decorated floating window, correct
+  page render, live waybar taskbar entry, Roblox Studio still visible and unaffected
+  running behind it. Closed cleanly afterward (`pkill chromium`) with no side effects on
+  the live session. No further action needed on window-layout arrangement (labwc's
+  floating/movable windows make manual side-by-side placement a non-issue, unlike sway's
+  tiling — see CLAUDE.md's "Window manager: labwc" section).
 
 ### 5. Persistence — Vinegar/Wine side DONE, 2026-08-11; Chrome profile still open
 - Done: `./data/vinegar-data` → `/root/.local/share/vinegar` (Kombucha Wine, Studio
@@ -204,6 +211,21 @@ container actually boots and it's clear what needs to be overridable.
   itself was deliberately not touched in this pass) and wiring code-docker's own Claude
   Code to the bridge. The MCP bridge itself was originally deferred alongside this but was
   actually built the next day — see Milestone 8 below.
+- **Concrete connection mechanism now designed, 2026-08-13**: `code-docker-integration-
+  plan.md` (repo root) — a Docker Compose `include:` chain (validated end-to-end with
+  real `docker compose config` runs, see that doc's "검증 방법" section) that lets
+  code-docker's own `docker-compose.yml` stay untouched/upstream-clean while pulling in
+  this repo's services. `roblox-studio-code-docker.yml` (new, repo root) implements
+  both phases now: "Phase 1" (attaches `studio` to `code-docker-internal`) and
+  "Phase 2" (2026-08-13/14, done — VNC on its own `roblox-studio-vnc` `internal: true`
+  network, reachable only via `code-docker-router`'s `forwards:`; new `studio-netinit`
+  sidecar keeps `studio`'s default route pointed at router, same pattern
+  code-docker/dind use). Turned out no code-docker-side code changes were needed after
+  all — real testing showed `forwards:`/the host firewall don't actually constrain
+  this the way the code comments suggested; the real fix was entirely on this repo's
+  side (the netinit sidecar). See `code-docker-integration-plan.md`'s "Phase 2 — 구현
+  완료" section. Still open: a real end-to-end run with the actual Studio image and a
+  VNC client, not done yet (config/component-level only so far).
 
 ### 8. Studio MCP bridge — done, 2026-08-13
 - Roblox Studio's built-in MCP server (stdio-only, single-machine by design) bridged out
