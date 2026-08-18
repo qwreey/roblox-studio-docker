@@ -34,15 +34,23 @@ services:
       roblox-studio-vnc:
         aliases:
           - vnc-only
-    # docker-compose.yml이 게시하는 VNC_PORT(5900)/MCP_PORT(8787) 중 VNC만 host 직접
-    # 게시를 끊는다 - MCP 브리지 격리는 이 오버레이의 범위 밖(아직 안 된 별도 작업, 위
-    # 주석 참고)이라 그대로 유지. Compose에 "리스트에서 항목 하나만 빼기"가 없어서
-    # !override로 전체를 이 목록으로 교체하는 방식 - VNC_PORT를 여기서 다시 넣으면
-    # 그게 바로 "VNC 격리 끊김"이므로 절대 추가하지 말 것. (`!reset`은 완전히 비우기
-    # 전용 태그라 뒤에 값을 써도 무시되고 통째로 사라진다는 걸 `docker compose config`로
-    # 직접 확인함 - `!override`가 맞는 태그.)
-    ports: !override
-      - "${MCP_PORT:-8787}:8787"
+    # docker-compose.yml의 ports: (VNC_PORT/MCP_PORT 둘 다 host 게시)를 통째로 비운다.
+    # VNC_PORT는 격리가 목적이라 당연하고, MCP_PORT도 사실 여기선 게시할 필요가 없다 -
+    # 실측 확인(2026-08-18): code-docker와 통합된 상태에서 studio는
+    # code-docker-internal/roblox-studio-vnc 둘 다 internal: true라 non-internal
+    # 네트워크가 하나도 없고, Docker는 그런 컨테이너의 host publish DNAT를 조용히
+    # 건너뛴다 - 즉 예전 `ports: !override - MCP_PORT` 설정은 실제로는 아무것도 게시하지
+    # 못하고 있었다(에러도 없이). MCP 브리지의 실제 소비 경로는 애초에 host publish가
+    # 아니라 code-docker 자신의 에이전트 컨테이너가 code-docker-internal 위에서
+    # `studio:8787`로 직접 붙는 것(위 networks 주석 참고, SETUP.md "Studio MCP over the
+    # network") - 이게 실측으로 정상 동작 확인됨. code-docker 바깥에서 MCP에 접근할
+    # 필요가 생기면 host publish를 되살리는 대신 code-docker-router의 netgate
+    # `forwards:`(VNC와 동일한 방식, docs/egress-netgate.md 참고)나 Dev
+    # Proxy/App Routes로 노출하는 쪽이 이 프로젝트의 "국경은 router만" 원칙과 일관된다.
+    # (`!reset`은 완전히 비우기 전용 태그라 뒤에 값을 써도 무시되고 통째로 사라진다는 걸
+    # `docker compose config`로 직접 확인함 - 빈 리스트 하나만 필요하므로 여기선 그게 맞는
+    # 태그.)
+    ports: !reset []
   # code-docker/dind와 동일한 netinit 패턴 - studio는 code-docker와 같은 신뢰 등급의
   # 개발용 컨테이너로 취급한다(Roblox Studio 자체에 HTTPService/plugin 권한이 있어
   # 임의 아웃바운드가 가능함) - /dev/dri 때문에 별도 컨테이너로만 분리했을 뿐 네트워크

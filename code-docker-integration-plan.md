@@ -141,17 +141,54 @@ forward 트래픽에 SNAT을 걸어 studio가 항상 router만 보게 하는 대
   `roblox-studio-vnc`를 필드 병합으로 얻는 것, `studio-netinit`이
   `network_mode: service:studio`로 올바르게 빌드/구성되는 것 전부 확인.
 
-**아직 안 된 것 (범위 밖으로 명시적으로 남김)**: 실제 `docker compose up`으로
-Roblox Studio 이미지까지 통째로 띄워서 VNC 클라이언트로 끝까지 접속해보는
-end-to-end 검증은 이번에 안 했다 (Studio/Wine 이미지 빌드가 무겁고, 검증
-환경에 안정적인 인터넷이 없었음) - `docker compose config` 레벨 검증과, 개별
-구성요소(netinit 사이드카 이미지 빌드, DNAT+반환 라우트 메커니즘 자체)는
-code-docker 쪽 별도 테스트 네트워크로 확실히 검증됐지만, 최종 조합은 실제
-배포 환경에서 한 번 확인 필요.
+**2026-08-18 업데이트 — end-to-end 검증 완료, 아래는 더 이상 미해결 아님.** 실제
+`docker compose up`으로 두 repo를 나란히 띄워서 끝까지 확인했다 - 자세한 내용은
+바로 아래 "## 2026-08-18 — 실제 end-to-end 테스트 결과" 절 참고.
 
 `forwards:` 항목(host_port -> `vnc-only`:5900) 추가는 컴포즈 파일이 아니라
 `docker compose up` 이후 router-manager의 Net 관리 탭/API에서 런타임에 하는
-것 - code-docker 쪽 `docs/router.md` 참고.
+것 - code-docker 쪽 `docs/router.md` 참고. 실제로 `curl -X POST
+/router/api/netgate/forwards -d '{"hostPort":5900,"targetHost":"vnc-only",
+"targetPort":5900}'`로 해봤고 정상 동작했다.
+
+## 2026-08-18 — 실제 end-to-end 테스트 결과
+
+`code-docker/extra-include.yml` (`path: ../roblox-studio-docker/roblox-studio-code-docker.yml`,
+버전관리 대상 아님) → `EXTRA_INCLUDE=extra-include.yml
+CODE_DOCKER_EXTRA_INTERNAL_NETWORKS=roblox-studio-vnc docker compose up -d`로
+6개 컨테이너(code-docker, dind, netinit, netfilter-fix, router, studio,
+studio-netinit) 전부 실제로 띄워서 확인함:
+
+- **격리**: code-docker 컨테이너에서 `studio:5900` 연결 시도 → `Connection
+  refused` (라우팅이 막힌 게 아니라 wayvnc 자체가 `vnc-only` alias IP에만
+  바인딩해서 나는 fail-closed 거부 - 설계대로).
+- **경로**: router의 `code-docker-external` IP:5900으로 접속 → 실제 `RFB
+  003.008` 배너 수신. `studio-netinit`의 반환 라우트 수정이 실제로 동작함을
+  증명.
+- **netfilter-fix**: `CODE_DOCKER_EXTRA_INTERNAL_NETWORKS=roblox-studio-vnc`
+  설정 시 두 네트워크 모두 watching하고 DOCKER-USER 룰 2개 정상 설치.
+
+**테스트 중 실제로 발견해서 고친 버그**: `roblox-studio-vnc` 네트워크에
+`name:`이 없어서 Compose가 `code-docker_roblox-studio-vnc`로 자동 접두사를
+붙였는데, `CODE_DOCKER_EXTRA_INTERNAL_NETWORKS`는 접두사 없는 순수 이름을
+기대하는 계약이라 실측 전까진 이게 조용히 안 먹혔다 - 명시적 `name:
+roblox-studio-vnc` 추가로 수정 (커밋 d6d6ea4).
+
+**MCP_PORT 관련 정정 (중요)**: 이 문서와 `CLAUDE.md`가 이전에 "MCP_PORT는
+host에 그대로 게시된 채 유지된다"고 썼던 건 틀렸다 - code-docker와 통합된
+상태에서 `studio`는 `code-docker-internal`/`roblox-studio-vnc` 둘 다
+`internal: true`라 non-internal 네트워크가 하나도 없고, Docker는 그런
+컨테이너의 host publish DNAT를 에러 없이 그냥 건너뛴다(실측: 컨테이너 IP로
+직접 붙으면 8787 정상 응답, `127.0.0.1:8787`은 응답 없음). **오너 결정
+(2026-08-18): 이건 고칠 필요 없음 - MCP_PORT는 애초에 host에 공개될 필요가
+없고, 실제 소비 경로는 code-docker 자신의 에이전트 컨테이너가
+`code-docker-internal` 위에서 `studio:8787`로 직접 붙는 것(실측 확인:
+`code-docker -> studio:8787` reachable)이 맞다.** code-docker 바깥에서 MCP에
+접근할 필요가 생기면 host publish를 되살리는 대신 `code-docker-router`의
+netgate `forwards:`(VNC와 동일한 방식)나 Dev Proxy/App Routes로 노출하는 쪽이
+"국경은 router만" 원칙과 일관됨 - `roblox-studio-code-docker.yml`의 `ports:`도
+이제 `!reset []`로 아예 비워서 이 사실을 코드로도 반영했다(예전
+`!override - MCP_PORT`는 어차피 아무것도 게시 못 하고 있었으므로).
 
 ## code-docker 쪽에서 할 일 — 전부 완료 (2026-08-13/14)
 

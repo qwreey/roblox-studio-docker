@@ -409,28 +409,43 @@ tag for "replace with this value", confirmed the hard way via `docker compose co
 dropping the field entirely when `!reset` was given a non-empty list).
 **`roblox-studio-code-docker.yml` already exists in this repo** and now covers both
 phases: Phase 1 (`studio` on `code-docker-internal`) and **Phase 2, implemented
-2026-08-13/14** (VNC on its own `roblox-studio-vnc` `internal: true` network,
-unreachable from code-docker's agent container, reachable only via
-`code-docker-router`'s `forwards:`; `VNC_PORT` no longer host-published, `MCP_PORT`
-still is). Turned out the earlier assumption that this needed code-docker-side
-`forwards:`/netgate code changes was wrong — real testing (in a code-docker session,
-against an actual built router image + test networks, not just reading code) showed
-`forwards:` already resolves any hostname router is attached to with zero code
-changes, and the host-level `DOCKER-INTERNAL` firewall chain doesn't even apply to
-this traffic pattern (router relaying directly between two bridges it's a member of
-bypasses that chain entirely — confirmed via `nft` counters staying at zero through a
-successful connection). The actual blocker was that `internal: true` networks get no
-default gateway route at all, so `studio` had no way to route a reply back to the
-original client — fixed by giving `studio` the same netinit-sidecar pattern
-code-docker/dind already use (`netinit/` in this repo, vendored from code-docker's own
-`netinit/` subtree — new `studio-netinit` service, `network_mode: service:studio` +
-`NET_ADMIN`, keeps studio's default route pointed at router). See
-`code-docker-integration-plan.md`'s "Phase 2 — 구현 완료" section for the full
-before/after. code-docker's repo needed zero changes for this feature specifically
-(its earlier `EXTRA_INCLUDE`/`include:` plumbing from Phase 1 was all that was
-needed) — what's still open is a real end-to-end run (`docker compose up` with the
-actual Studio image, a VNC client connecting through router's forward) which hasn't
-been done yet (config-level and component-level testing only so far).
+2026-08-13/14, end-to-end verified 2026-08-18** (VNC on its own `roblox-studio-vnc`
+`internal: true` network, unreachable from code-docker's agent container, reachable
+only via `code-docker-router`'s `forwards:`; `ports:` is `!reset []` — neither
+`VNC_PORT` nor `MCP_PORT` is host-published in this topology, see the `MCP_PORT`
+paragraph below for why that's fine). Turned out the earlier assumption that this
+needed code-docker-side `forwards:`/netgate code changes was wrong — real testing (in
+a code-docker session, against an actual built router image + test networks, not just
+reading code) showed `forwards:` already resolves any hostname router is attached to
+with zero code changes, and the host-level `DOCKER-INTERNAL` firewall chain doesn't
+even apply to this traffic pattern (router relaying directly between two bridges it's
+a member of bypasses that chain entirely — confirmed via `nft` counters staying at
+zero through a successful connection). The actual blocker was that `internal: true`
+networks get no default gateway route at all, so `studio` had no way to route a reply
+back to the original client — fixed by giving `studio` the same netinit-sidecar
+pattern code-docker/dind already use (`netinit/` in this repo, vendored from
+code-docker's own `netinit/` subtree — new `studio-netinit` service, `network_mode:
+service:studio` + `NET_ADMIN`, keeps studio's default route pointed at router). See
+`code-docker-integration-plan.md`'s "2026-08-18 — 실제 end-to-end 테스트 결과"
+section for the full real-run results (RFB banner received through router's forward,
+isolation confirmed via `Connection refused` from code-docker, plus a real
+`roblox-studio-vnc` network-naming bug found and fixed). code-docker's repo needed
+zero code changes for this feature specifically (its earlier `EXTRA_INCLUDE`/
+`include:` plumbing from Phase 1 was all that was needed).
+
+**`MCP_PORT` is not host-published once integrated with code-docker, and that's
+correct, not a gap (owner decision, 2026-08-18).** In this topology `studio` ends up
+with zero non-internal networks (`code-docker-internal` and `roblox-studio-vnc` are
+both `internal: true`), so Docker silently skips the host-publish DNAT for `MCP_PORT`
+even before Phase 2 existed — confirmed live: connecting to the container's own IP on
+8787 works, `127.0.0.1:8787` on the host doesn't. This doesn't matter because the
+actual intended consumption path was never host-publish in the first place — it's
+code-docker's own agent container reaching `studio:8787` directly over
+`code-docker-internal` (confirmed reachable in the same 2026-08-18 test). If MCP
+access from *outside* code-docker is ever needed, wire it the same way as VNC —
+`code-docker-router`'s netgate `forwards:` or Dev Proxy/App Routes — rather than
+reviving host-publish, to stay consistent with this project's "only router crosses
+the border" principle.
 
 ## Studio MCP bridge — built and verified end-to-end, 2026-08-13
 

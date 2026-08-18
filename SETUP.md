@@ -277,11 +277,13 @@ gated by `Authorization: Bearer <MCP_TOKEN>`.
 - Only Caddy's port (`MCP_PORT`, default 8787) is published from the container;
   supergateway's own upstream port has no auth of its own and must never be published
   directly (see `config/mcp/Caddyfile`'s header comment).
-- Nothing here reaches into `~/Projects/code-docker` — this bridge is reachable from
-  wherever `MCP_PORT` is published to (same trust-boundary considerations as `VNC_PORT`
-  apply). See CLAUDE.md's "Future code-docker integration" section for the *separate*,
-  still-deferred question of wiring this into code-docker's own network topology instead
-  of a plain published port.
+- Everything above describes **standalone** usage (this repo's own `docker-compose.yml`
+  alone, no code-docker attached) — `MCP_PORT` really is published to the host in that
+  mode. When run *with* code-docker instead (`roblox-studio-code-docker.yml`, see
+  CLAUDE.md's "MCP_PORT is not host-published once integrated with code-docker" note),
+  `MCP_PORT` is intentionally not published at all — code-docker's own agent container
+  reaches the bridge directly over `code-docker-internal` instead, and outside access (if
+  ever needed) goes through `code-docker-router`, not a host-published port.
 
 ## If something breaks
 
