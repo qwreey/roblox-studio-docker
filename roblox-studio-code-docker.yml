@@ -82,6 +82,12 @@ services:
 networks:
   # agent 컨테이너(code-docker/dind)는 절대 못 붙는, VNC 전용 격리망 - router만
   # studio와 같이 붙어서 사람에게 VNC를 중계한다("국경은 router만" 원칙, code-docker
-  # 쪽 CLAUDE.md 참고).
+  # 쪽 CLAUDE.md 참고). name: 없이 두면 Compose가 프로젝트 이름을 붙여
+  # "code-docker_roblox-studio-vnc"로 만드는데, code-docker 쪽
+  # CODE_DOCKER_EXTRA_INTERNAL_NETWORKS(example-env 참고)는 접두사 없는 순수
+  # 네트워크 이름을 기대한다(code-docker-internal/external 자신이 항상 그렇듯) -
+  # 이 network만 예외가 되지 않도록 명시적으로 이름을 고정한다(실측 확인: 2026-08-18,
+  # code-docker-netfilter-fix가 이 이름 없이는 "not up yet"만 반복 출력).
   roblox-studio-vnc:
+    name: roblox-studio-vnc
     internal: true
