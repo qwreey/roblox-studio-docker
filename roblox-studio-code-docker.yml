@@ -34,8 +34,10 @@ services:
       roblox-studio-vnc:
         aliases:
           - vnc-only
-    # docker-compose.yml의 ports: (VNC_PORT/MCP_PORT 둘 다 host 게시)를 통째로 비운다.
-    # VNC_PORT는 격리가 목적이라 당연하고, MCP_PORT도 사실 여기선 게시할 필요가 없다 -
+    # docker-compose.yml의 ports: (VNC_PORT/VNC_WEB_PORT/MCP_PORT 전부 host 게시)를
+    # 통째로 비운다. VNC_PORT/VNC_WEB_PORT는 격리가 목적이라 당연하고(noVNC 웹 UI도
+    # wayvnc와 같은 VNC_BIND_ALIAS 대상이라 code-docker-router의 App Routes로만
+    # 노출됨 - novnc-service.sh 참고), MCP_PORT도 사실 여기선 게시할 필요가 없다 -
     # 실측 확인(2026-08-18): code-docker와 통합된 상태에서 studio는
     # code-docker-internal/roblox-studio-vnc 둘 다 internal: true라 non-internal
     # 네트워크가 하나도 없고, Docker는 그런 컨테이너의 host publish DNAT를 조용히

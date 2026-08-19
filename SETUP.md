@@ -33,7 +33,9 @@ docker compose build
 docker compose up -d
 ```
 
-The container publishes VNC on `${VNC_PORT:-5900}` (host port, default 5900).
+The container publishes VNC on `${VNC_PORT:-5900}` (host port, default 5900) and a
+browser-only noVNC web UI on `${VNC_WEB_PORT:-6080}` (default 6080) — see "No client
+installed? Use the browser instead" below.
 
 **Set `VNC_PASSWORD`** in `.env` (or as an env var) before exposing this beyond
 `localhost` — if it's unset, `wayvnc` runs with *no authentication at all*. Fine for a
@@ -63,6 +65,18 @@ This is a genuine remote desktop, not a screenshot tool — connect with a real 
 - **Password**: whatever `VNC_PASSWORD` was set to. If it was left unset, `wayvnc` runs
   with *no authentication at all* (connect with no username/password, and see the
   warning below).
+
+### No client installed? Use the browser instead
+
+A second, parallel path — `http://<host>:6080/vnc.html` (or whatever `VNC_WEB_PORT` was
+set to) — proxies the exact same wayvnc session through noVNC/websockify, no native
+client install needed. Verified working end-to-end (2026-08-19, see CLAUDE.md's "VNC
+embedding" section) — **but only with `VNC_PASSWORD` unset**. With it set, the browser
+connection currently fails with `Unsupported security types (types: 262)` — a confirmed
+wayvnc/noVNC version mismatch, not a misconfiguration on your end; see CLAUDE.md for the
+root cause and the recommended workaround (gate access via `code-docker-router`'s App
+Routes `requireAuth`/tinyauth instead of `VNC_PASSWORD` when reaching the session this
+way).
 
 ### Which client to use
 

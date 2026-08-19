@@ -258,6 +258,28 @@ container actually boots and it's clear what needs to be overridable.
   touching `dbus`/`labwc`/`wayvnc` or the container's uptime, and the bridge came back
   healthy within seconds.
 
+### 10. VNC embedding: noVNC + websockify added in front of wayvnc — done, e2e-verified with one known open issue, 2026-08-19
+- `[program:novnc]` (websockify, `--web` serving noVNC's static client) now runs
+  alongside `wayvnc`, proxying the same session as HTTP+WebSocket on `VNC_WEB_PORT`
+  (default 6080) instead of raw RFB — this is what lets code-docker-router's App
+  Routes/Dev Proxy (stock Caddy, HTTP/WS-only) reach it at all, since raw RFB can't be
+  proxied by either. wayvnc itself is unchanged (still the native-client path,
+  `VNC_PORT`). Full design/isolation reasoning in CLAUDE.md's "VNC embedding" section;
+  router-side decision record (why noVNC over KasmVNC/Guacamole/Selkies) in
+  code-docker's own `.claude/backlog/router-vnc-tab-plan.md`.
+- **Verified live, 2026-08-19**: real build, a real integrated stack (this repo +
+  code-docker + router via `EXTRA_INCLUDE`), a real App Routes entry
+  (`vnc-only:6080` → `/app/studio-vnc/`), and a real browser driven through that path —
+  confirmed network isolation (only router can reach `vnc-only`), confirmed the noVNC UI
+  and all its assets resolve correctly under the App Routes subpath, and confirmed a full
+  connect with live mouse-cursor movement through the tunnel.
+- **Known open issue found by that test**: with `VNC_PASSWORD` set, the browser
+  connection fails (`Unsupported security types (types: 262)`) — a real version mismatch
+  between wayvnc's offered RFB security types and what this noVNC release implements, not
+  a wiring bug. Full root-cause and the recommended interim mitigation (gate the App
+  Routes entry with tinyauth instead of relying on `VNC_PASSWORD` for the web path) are in
+  CLAUDE.md's "VNC embedding" section — not yet fixed, tracked there.
+
 ## Open questions (resolve before or during implementation, not blocking the plan itself)
 
 - ~~sway vs labwc for the compositor~~ — **resolved 2026-08-11: switched to `labwc`.**

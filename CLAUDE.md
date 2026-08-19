@@ -304,6 +304,83 @@ client the owner already had success with. Username for any client is **`studio`
 (hardcoded, unrelated to the container's `root` OS user — easy to reach for `root` by
 habit and get a confusing failure instead).
 
+## VNC embedding: noVNC + websockify added in front of wayvnc — 2026-08-19
+
+Added a browser-reachable path alongside the native-client path above, not instead of
+it. wayvnc itself is unchanged — still raw RFB-only on `VNC_PORT`, still the right choice
+for TigerVNC/whatever client actually worked per the section above. `websockify`
+(`config/supervisor/novnc-service.sh`, `[program:novnc]`) now also runs, proxying the
+same wayvnc session as HTTP+WebSocket on `VNC_WEB_PORT` (default 6080) with noVNC's
+static web client (`--web`) served alongside it — visit `/vnc.html` there for a
+zero-install browser VNC session. Both noVNC and websockify are release tarballs
+(`ARG NOVNC_VERSION`/`ARG WEBSOCKIFY_VERSION` in the Dockerfile), not distro packages
+(neither is in Arch's official repos) — same "curl a tagged tarball, build/vendor it"
+pattern Vinegar above already uses, not a `git clone` (avoids a `git` dependency for a
+one-time checkout).
+
+`novnc-service.sh` mirrors `wayvnc-service.sh`'s own `VNC_BIND_ALIAS` handling exactly,
+independently, for both directions it needs it: (1) as the *target* address it connects
+to (must resolve the same alias wayvnc itself bound to — "localhost" would silently fail
+to connect once `VNC_BIND_ALIAS` is set, since wayvnc then only listens on that resolved
+IP, not loopback) and (2) as its own *listen* address (same fail-closed
+resolve-or-exit-1 behavior as wayvnc — if the noVNC web port bound `0.0.0.0` while
+wayvnc's raw port stayed alias-restricted, that would reopen the exact isolation gap
+`VNC_BIND_ALIAS` exists to close, just through the new HTTP path instead of the old raw
+RFB one). One env var segments both paths identically — see docker-compose.yml's own
+comment on `VNC_BIND_ALIAS`.
+
+This is what makes the VNC session reachable from `code-docker-router`'s App Routes/Dev
+Proxy at all — both are stock Caddy (HTTP/WS-only), and can't proxy raw RFB (a binary TCP
+protocol) no matter how the target is allow-listed. See code-docker's own
+`.claude/backlog/router-vnc-tab-plan.md` for the full router-side design/decision record
+(noVNC chosen over KasmVNC/Guacamole/a Selkies rewrite — Selkies stays backlogged, revisit
+only if noVNC's software-encoding CPU cost becomes a real problem in practice) and
+`docs/dev-proxy.md`/`docs/app-routes.md`'s own `ROUTER_EXTRA_ALLOWED_TARGET_HOSTS` entry
+for how a target like `vnc-only:6080` gets past router's own self-SSRF allowlist without a
+router code change.
+
+**End-to-end verified, 2026-08-19**: real `docker compose build` + a live integrated
+stack (this container + code-docker + router via `EXTRA_INCLUDE`), an actual App Routes
+entry (`vnc-only:6080` → `/app/studio-vnc/`) registered through router-manager's API, and
+a real browser driven through that exact path — confirmed network isolation (code-docker
+container can't even resolve `vnc-only`; router can, gets a real `RFB 003.008` banner),
+confirmed the noVNC static UI + all its relative assets resolve correctly under the
+`/app/studio-vnc/` subpath (no path-rewrite issues), and confirmed a full connect with
+live mouse-cursor movement through the tunnel ("Connected (unencrypted) to WayVNC").
+
+**Real finding from that test — `VNC_PASSWORD` currently breaks the noVNC path**: with
+`VNC_PASSWORD` set, the connection fails in the browser with `Unsupported security types
+(types: 262)`. Root-caused, not just observed: wayvnc (v0.10.1 here) offers top-level RFB
+security types `[19, 129, 5]` (VeNCrypt, plus two non-standard/legacy IDs — neither
+matches noVNC's `securityTypeRA2ne = 6`, the modern RSA-AES type noVNC actually
+implements), so noVNC picks VeNCrypt(19) and proceeds to VeNCrypt subtype negotiation —
+where wayvnc offers only subtype 262 (`X509Plain`, TLS-wrapped, needs a real client-side
+X.509/TLS stack). This bundled noVNC release (1.6.0's `core/rfb.js`) implements **no**
+VeNCrypt TLS subtype at all (`_isSupportedSecurityType`'s list has no 256/257/258/260/261/
+262 — the closest is `securityTypePlain = 256`, cleartext, which wayvnc never offers when
+a cert is configured). This isn't a config mistake on this repo's side — it's a genuine
+version/feature mismatch between this specific wayvnc build and this specific noVNC
+build, confirmed by a raw RFB handshake probe (`python3` socket read of the security-type
+bytes) alongside the browser console error. **With `VNC_PASSWORD` unset, wayvnc offers
+only type `1` (None) and the connection succeeds cleanly** — that's how the live
+end-to-end pass above was actually done (temporarily, then reverted).
+
+**Practical implication — don't rely on `VNC_PASSWORD` as the noVNC path's access
+control today.** Both websockify and wayvnc's raw RFB port serve the *same* wayvnc
+process, so there's no way to require auth for the web path only while leaving the native
+one open (or vice versa) short of running two wayvnc instances. Until this gets a real
+fix (see below), the actual gate for the browser path should be
+`code-docker-router`'s own App Routes `requireAuth` (tinyauth) — leave `VNC_PASSWORD` set
+for the native-client path (TigerVNC etc. still works fine, per the section above) and
+know that reaching it *through noVNC* currently means either (a) tinyauth-gate the App
+Routes entry and run wayvnc passwordless, accepting that anyone who reaches the raw RFB
+port directly still needs no credential either way, or (b) leave `VNC_PASSWORD` set and
+accept noVNC just won't connect until this is fixed. Not resolved as of this writing —
+options for a real fix, not yet evaluated in depth: a newer/different wayvnc build that
+can be told to offer a subtype noVNC supports; patching in a VeNCrypt TLS subtype on the
+noVNC side; or simply standardizing on tinyauth as documented above and treating wayvnc's
+own auth as native-client-only.
+
 ## Key constraints to keep in mind while building
 
 - **GPU is a hard requirement, not a nice-to-have**, for Roblox Studio's DXVK/native-Vulkan

@@ -5,6 +5,7 @@ services:
     container_name: roblox-studio
     ports:
       - "${VNC_PORT:-5900}:5900"
+      - "${VNC_WEB_PORT:-6080}:6080"
       - "${MCP_PORT:-8787}:8787"
     devices:
       - /dev/dri:/dev/dri
@@ -26,11 +27,18 @@ services:
       - ./data/wayvnc:/root/.config/wayvnc
     environment:
       VNC_PORT: "5900"
+      # noVNC/websockify's HTTP+WebSocket front end for the same wayvnc session — see
+      # CLAUDE.md's "VNC embedding" section. Container-internal listen port (mirrors the
+      # VNC_PORT pattern) — override the host-side port via the ports mapping's
+      # ${VNC_WEB_PORT:-6080} instead, not this value.
+      VNC_WEB_PORT: "6080"
       VNC_PASSWORD: "${VNC_PASSWORD:-}"
       # Unset by default — see entrypoint.sh's VNC_BIND_ALIAS handling and CLAUDE.md's
       # "VNC_BIND_ALIAS" section. Only needed when attaching this container to multiple
       # Docker networks (e.g. a future code-docker integration) and VNC must be bound to
-      # one specific network's IP rather than 0.0.0.0.
+      # one specific network's IP rather than 0.0.0.0. Applies to both wayvnc's raw RFB
+      # port and websockify's noVNC web port (see novnc-service.sh) — one variable
+      # segments both paths identically.
       VNC_BIND_ALIAS: "${VNC_BIND_ALIAS:-}"
       # MCP bridge (mcp-bridge.sh) — NOT auto-started by entrypoint.sh, see that script's
       # own header comment and SETUP.md's "Studio MCP over the network" section. MCP_PORT

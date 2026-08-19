@@ -42,6 +42,7 @@ RUN pacman -Syu --noconfirm --needed \
       npm \
       caddy \
       supervisor \
+      python \
     && pacman -Scc --noconfirm \
     && rm -rf /var/cache/pacman/pkg/*
 
@@ -59,6 +60,27 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
     && make PREFIX=/usr install \
     && cd / \
     && rm -rf "/tmp/vinegar-${VINEGAR_VERSION}" /tmp/vinegar.tar.gz /root/go /root/.cache
+
+# noVNC + websockify — see CLAUDE.md's "VNC embedding" section. wayvnc itself stays raw
+# RFB-only on VNC_PORT (unchanged, still the right choice for native clients like
+# TigerVNC/KRDC, see SETUP.md); this adds a second, parallel path that puts a browser-
+# reachable HTTP+WebSocket front end in front of the same session, which is what lets
+# code-docker-router's App Routes (HTTP/WS-only Caddy, can't proxy raw RFB) embed it. No
+# distro package for either (not in Arch's official repos or a reasonable AUR pin) — grab
+# tagged release tarballs the same way Vinegar above is built from source, not from git
+# (avoids adding a `git` dependency just for a release checkout). websockify needs only
+# python3 (already required for other tooling; no numpy — this isn't the perf-sensitive
+# multi-client-broadcast use case numpy exists for).
+ARG NOVNC_VERSION=1.6.0
+ARG WEBSOCKIFY_VERSION=0.13.0
+RUN curl -fsSL "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz" -o /tmp/novnc.tar.gz \
+    && mkdir -p /opt/novnc \
+    && tar xzf /tmp/novnc.tar.gz -C /opt/novnc --strip-components=1 \
+    && rm /tmp/novnc.tar.gz \
+    && curl -fsSL "https://github.com/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz" -o /tmp/websockify.tar.gz \
+    && mkdir -p /opt/websockify \
+    && tar xzf /tmp/websockify.tar.gz -C /opt/websockify --strip-components=1 \
+    && rm /tmp/websockify.tar.gz
 
 # Default browser for xdg-desktop-portal's OpenURI (used by Vinegar's "Login via
 # Browser" flow). Everything in this container runs as root (no non-root user set up),
@@ -97,13 +119,14 @@ RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh
 # directory for a stdout_logfile/stderr_logfile path itself — matches code-docker's own
 # Dockerfile, which does the same for the same reason.
 RUN mkdir -p /etc/roblox-studio/supervisord.d \
-      /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/mcp-bridge /var/log/critical-watchdog
+      /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog
 COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
 COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
 COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
 COPY config/supervisor/dbus-service.sh /etc/roblox-studio/dbus-service.sh
 COPY config/supervisor/labwc-service.sh /etc/roblox-studio/labwc-service.sh
 COPY config/supervisor/wayvnc-service.sh /etc/roblox-studio/wayvnc-service.sh
+COPY config/supervisor/novnc-service.sh /etc/roblox-studio/novnc-service.sh
 COPY config/supervisor/mcp-bridge-service.sh /etc/roblox-studio/mcp-bridge-service.sh
 COPY config/supervisor/critical-watchdog-service.sh /etc/roblox-studio/critical-watchdog-service.sh
 RUN chmod +x /etc/roblox-studio/*-service.sh
@@ -111,6 +134,6 @@ RUN chmod +x /etc/roblox-studio/*-service.sh
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 5900 8787
+EXPOSE 5900 6080 8787
 
 ENTRYPOINT ["/entrypoint.sh"]

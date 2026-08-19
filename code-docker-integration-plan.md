@@ -190,6 +190,42 @@ netgate `forwards:`(VNC와 동일한 방식)나 Dev Proxy/App Routes로 노출�
 이제 `!reset []`로 아예 비워서 이 사실을 코드로도 반영했다(예전
 `!override - MCP_PORT`는 어차피 아무것도 게시 못 하고 있었으므로).
 
+## 2026-08-19 — 브라우저 임베드 경로 추가 (noVNC), 이 문서의 raw forwards 경로는 그대로 유지
+
+위 raw RFB `forwards:` 경로(`vnc-only:5900`, 네이티브 VNC 클라이언트용)는 대체되지
+않고 그대로 남는다 - 이번에 추가된 건 **두 번째, 별도의** 경로: `studio` 쪽에
+`novnc`(websockify+noVNC, `VNC_WEB_PORT` 기본 6080)가 wayvnc 앞단에 추가돼
+HTTP+WebSocket으로도 같은 세션에 붙을 수 있게 됐고, router 쪽은 이걸 raw
+forwards가 아니라 **App Routes/Dev Proxy**(HTTP/WS 전용 Caddy)로 노출한다 - 이
+문서 초반 "핵심 메커니즘" 절이 다루는 것과 같은 네트워크 경로(`roblox-studio-vnc`,
+`vnc-only` alias)를 그대로 타되, router가 대상으로 허용하는 호스트 목록에
+`vnc-only`를 추가하는 절차만 다르다(`ROUTER_EXTRA_ALLOWED_TARGET_HOSTS=vnc-only`
+- 코드 변경 없이 `.env.router`만 편집). 전체 설계/격리 근거는 이 repo
+CLAUDE.md의 "VNC embedding" 절, router 쪽 결정 기록은 code-docker의
+`.claude/backlog/router-vnc-tab-plan.md` 참고.
+
+**2026-08-19 실제 end-to-end 테스트 결과**: 위 "2026-08-18" 절과 동일한 방식으로
+실 스택(`EXTRA_INCLUDE` + `CODE_DOCKER_EXTRA_INTERNAL_NETWORKS=roblox-studio-vnc`)을
+띄우고, router-manager API로 `vnc-only:6080` App Routes 항목(`studio-vnc`)을 실제
+등록한 뒤 브라우저(Claude-in-Chrome)로 `/app/studio-vnc/vnc.html`을 직접 열어
+확인함:
+- **격리**: `code-docker` 컨테이너는 `vnc-only`를 아예 resolve 못 함(DNS
+  실패) - `code-docker-router`는 정상 resolve + `RFB 003.008` 배너 수신.
+- **경로/에셋**: noVNC UI와 상대 경로 에셋(`app/*.js`, `app/styles/*.css`)이
+  `/app/studio-vnc/` 서브패스 아래에서 전부 정상 로드(200) - path rewrite
+  문제 없음.
+- **연결**: `curl`로 raw WebSocket upgrade 핸드셰이크 시도 시 `101 Switching
+  Protocols` 이후 실제 `RFB 003.008` 바이트 수신 확인. 브라우저에서도
+  "Connected (unencrypted) to WayVNC" 상태로 실제 연결 성공, 마우스 커서
+  이동까지 터널을 통해 실측 확인.
+- **발견한 실제 이슈(코드 버그 아님)**: `VNC_PASSWORD`가 설정된 상태에서는
+  noVNC가 `Unsupported security types (types: 262)`로 연결 실패 - wayvnc가
+  제공하는 RFB 보안 타입(VeNCrypt X509Plain 등)과 이 noVNC 릴리스가 구현한
+  타입 집합이 실제로 안 맞는 버전 호환성 문제로 근본 원인까지 확인함(raw RFB
+  핸드셰이크 프로브로 재현). `VNC_PASSWORD`를 비우면 정상 연결됨 - 실측은 이
+  상태로 진행 후 원복. 상세 근본원인/권장 우회책(tinyauth로 App Routes 게이팅)은
+  이 repo `CLAUDE.md`의 "VNC embedding" 절 참고 - 아직 미해결로 남음.
+
 ## code-docker 쪽에서 할 일 — 전부 완료 (2026-08-13/14)
 
 1~4는 code-docker 쪽 별도 세션에서 적용 완료 (`include:`/`EXTRA_INCLUDE`/
