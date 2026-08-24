@@ -94,10 +94,21 @@ networks:
   # studio와 같이 붙어서 사람에게 VNC를 중계한다("국경은 router만" 원칙, code-docker
   # 쪽 CLAUDE.md 참고). name: 없이 두면 Compose가 프로젝트 이름을 붙여
   # "code-docker_roblox-studio-vnc"로 만드는데, code-docker 쪽
-  # CODE_DOCKER_EXTRA_INTERNAL_NETWORKS(example-env 참고)는 접두사 없는 순수
-  # 네트워크 이름을 기대한다(code-docker-internal/external 자신이 항상 그렇듯) -
-  # 이 network만 예외가 되지 않도록 명시적으로 이름을 고정한다(실측 확인: 2026-08-18,
+  # NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS(example-env 참고)는 netfilter-fix가
+  # `docker network inspect`로 그대로 찾아볼 수 있는, compose가 최종적으로 만든 실제
+  # 이름을 기대한다(code-docker-internal/external 자신이 늘 그렇듯) - 이 network만
+  # 예외가 되지 않도록 명시적으로 이름을 고정한다(실측 확인: 2026-08-18,
   # code-docker-netfilter-fix가 이 이름 없이는 "not up yet"만 반복 출력).
+  #
+  # ${PREFIX}도 code-docker 자신의 네트워크(code-docker-internal 등)와 동일하게
+  # 여기 꿰어 넣는다 - 안 그러면 PREFIX가 다른 code-docker 인스턴스 두 개가 각자
+  # roblox-studio-docker를 연동해도 이 network 하나를 공유해버려서(둘 다 그냥
+  # "roblox-studio-vnc"), 서로 다른 배포의 router/studio가 같은 VNC 격리망에
+  # 섞이게 된다. 이 값은 code-docker 쪽 최상위 `.env`(docker compose를 실행하는
+  # 디렉터리)에서 substitution되므로, ootb.sh로 연동했다면 ootb-extra.sh가
+  # NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS에 같은 PREFIX를 붙여서 저장해준다
+  # (ootb-manifest.env의 OOTB_EXTRA_INTERNAL_NETWORKS 참고) - 수동 연동이라면
+  # 사람이 직접 두 값을 맞춰야 한다.
   roblox-studio-vnc:
-    name: roblox-studio-vnc
+    name: "${PREFIX:-}roblox-studio-vnc"
     internal: true
