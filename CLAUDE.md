@@ -381,6 +381,42 @@ can be told to offer a subtype noVNC supports; patching in a VeNCrypt TLS subtyp
 noVNC side; or simply standardizing on tinyauth as documented above and treating wayvnc's
 own auth as native-client-only.
 
+## `VNC_GPU`: wayvnc `--gpu` is opt-in, and measurably a no-op for noVNC here — 2026-08-25
+
+`VNC_GPU` (docker-compose env → `wayvnc-service.sh`) adds wayvnc's own `--gpu` flag
+(DMA-BUF capture + hardware H.264 through VAAPI). **Off by default**, and that default is
+a measurement, not caution — the encoder side is genuinely present in this image:
+
+- `neatvnc` here is linked against `libavcodec`+`libva`, `radeonsi_drv_video.so` is
+  installed, and `/dev/dri` (amdgpu `card1` + `renderD128`) has been passed through all
+  along. `wayvnc --gpu` starts and captures fine — no crash, nothing to fix.
+- But `--gpu`'s H.264 is only used for a client that **negotiates the open-h264 RFB
+  encoding**. noVNC 1.6 does implement it (WebCodecs, `core/decoders/h264.js`), gated
+  twice: `window.isSecureContext` — over plain HTTP `VideoDecoder` doesn't exist, so noVNC
+  never even offers H.264 — and its own real-frame probe in `core/util/browser.js`, added
+  to work around browsers that claim support they don't have.
+- Measured against this host (Chrome 151, AMD HawkPoint): from a secure context
+  (`localhost` port-forward) the probe still failed — `VideoDecoder.isConfigSupported`
+  returned `supported: true`, but decoding noVNC's probe chunk threw
+  `EncodingError: Decoding error` on the hardware decoder, while
+  `hardwareAcceleration: 'prefer-software'` decoded the same chunk fine. noVNC therefore
+  disabled H.264 entirely, and wayvnc logged `Choosing tight encoding` with `--gpu` on.
+
+So the flag exists to be tried from a different browser/GPU (and it costs nothing to
+leave off), not because turning it on speeds anything up here. This closes out the
+"먼저 `--gpu`만 켜고 VAAPI가 실제로 동작하는지 확인" item in code-docker's own archived
+`router-vnc-tab-plan-done.md`: the answer is that the *encoder* side is fine and the
+*browser decoder* side is what blocks it — which is also why Selkies stays the real answer
+for latency-sensitive 3D interaction, not this flag.
+
+Related, same measurement session: **client-side resize already works end to end** with no
+change on this side. wayvnc 0.10.1 has automatic resizing on by default (`-R`/
+`--disable-resizing` is the opt-out), and connecting noVNC with `resize=remote` moved
+`HEADLESS-1` off 1920x1080 to the browser viewport's size and tracked later window
+resizes (`wlr-randr` confirmed). What was missing was purely on the *viewer* side —
+code-docker's router hardcoded `resize=scale` in the noVNC URL; that's now a per-target
+setting there (see its `router/docs/vnc.md`).
+
 ## Key constraints to keep in mind while building
 
 - **GPU is a hard requirement, not a nice-to-have**, for Roblox Studio's DXVK/native-Vulkan

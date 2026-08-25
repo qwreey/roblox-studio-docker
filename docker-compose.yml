@@ -44,6 +44,12 @@ services:
       # port and websockify's noVNC web port (see novnc-service.sh) — one variable
       # segments both paths identically.
       VNC_BIND_ALIAS: "${VNC_BIND_ALIAS:-}"
+      # Off by default - see wayvnc-service.sh's own comment for the measurement behind
+      # that default (the GPU encoder side is present; whether anything actually uses it
+      # depends on the client negotiating H.264) and .env.example for the user-facing
+      # version. Purely a wayvnc capture/encode setting - it has nothing to do with the
+      # /dev/dri passthrough above, which labwc and Roblox Studio use regardless.
+      VNC_GPU: "${VNC_GPU:-}"
       # MCP bridge (mcp-bridge.sh) — NOT auto-started by entrypoint.sh, see that script's
       # own header comment and SETUP.md's "Studio MCP over the network" section. MCP_PORT
       # here is the fixed container-internal Caddy listen port (mirrors the VNC_PORT

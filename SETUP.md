@@ -78,6 +78,21 @@ root cause and the recommended workaround (gate access via `code-docker-router`'
 Routes `requireAuth`/tinyauth instead of `VNC_PASSWORD` when reaching the session this
 way).
 
+### Hardware-accelerated VNC encoding (`VNC_GPU`)
+
+Off by default. Setting `VNC_GPU=true` in `.env` adds wayvnc's `--gpu` flag (DMA-BUF
+capture + VAAPI H.264). This is **not** what gives Roblox Studio its GPU acceleration —
+that comes from the `/dev/dri` passthrough and is always on.
+
+Turning it on is safe but frequently changes nothing, because H.264 is only used when the
+*client* asks for it. In the browser that requires a secure context (HTTPS, or
+`localhost` — over plain HTTP the browser exposes no WebCodecs decoder at all, so noVNC
+never offers H.264) *and* a browser/GPU whose H.264 decoder passes noVNC's own support
+probe. On an AMD host with Chrome that probe failed even over a secure context, leaving
+the session on software `tight` encoding with `--gpu` enabled — see CLAUDE.md's
+"`VNC_GPU`" section for the full measurement. Worth trying with your own
+browser/GPU; not something to assume is helping.
+
 ### Which client to use
 
 When `VNC_PASSWORD` is set, `wayvnc` advertises **three** RFB security types at once and

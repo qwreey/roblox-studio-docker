@@ -7,6 +7,7 @@ wait_for_wayland_socket
 VNC_PORT="${VNC_PORT:-5900}"
 VNC_PASSWORD="${VNC_PASSWORD:-}"
 VNC_BIND_ALIAS="${VNC_BIND_ALIAS:-}"
+VNC_GPU="${VNC_GPU:-}"
 
 # VNC_BIND_ALIAS lets wayvnc bind to one specific Docker network's IP instead of every
 # attached network at once - groundwork for a future code-docker integration where this
@@ -34,6 +35,37 @@ if [[ -n "${VNC_BIND_ALIAS}" ]]; then
 fi
 
 WAYVNC_ARGS=(--output=HEADLESS-1 "${VNC_BIND_ADDR}" "${VNC_PORT}")
+
+# VNC_GPU turns on wayvnc's own --gpu ("enable features that need GPU"): DMA-BUF capture
+# and hardware H.264 encoding through VAAPI. It is off by default, and that default is a
+# measurement rather than caution about /dev/dri (which this container has had passed
+# through all along, and which labwc already renders on):
+#
+#   - --gpu's H.264 is only used for a client that negotiates the open-h264 RFB encoding.
+#     For a native client that means the client must implement it; for the noVNC path it
+#     means noVNC's WebCodecs H.264 support, which needs (1) a secure context - over plain
+#     HTTP `VideoDecoder` doesn't exist at all, so noVNC never even offers H.264, and
+#     (2) a browser that can actually decode noVNC's own probe frame.
+#   - Measured 2026-08-25 on this host (AMD HawkPoint/amdgpu, radeonsi VAAPI present,
+#     neatvnc linked against libavcodec+libva - i.e. the encoder side is genuinely there):
+#     even from a secure context, Chrome 151 failed that probe on the hardware decoder
+#     (`prefer-software` decoded the same frame fine), so noVNC disabled H.264 and wayvnc
+#     logged `Choosing tight encoding` with --gpu on. No crash, no visible difference -
+#     just no benefit.
+#
+# So: harmless to turn on, worth trying from a different browser/GPU, but not something to
+# default to as if it were free. wayvnc itself is unchanged in every other respect.
+case "${VNC_GPU}" in
+  1|true|TRUE|yes|YES|on|ON)
+    echo "[wayvnc-service] VNC_GPU=${VNC_GPU} — enabling wayvnc --gpu (DMA-BUF capture + VAAPI H.264; only actually used if the client negotiates H.264)"
+    WAYVNC_ARGS=(--gpu "${WAYVNC_ARGS[@]}")
+    ;;
+  ''|0|false|FALSE|no|NO|off|OFF) ;;
+  *)
+    echo "[wayvnc-service] WARNING: VNC_GPU=${VNC_GPU} is not a recognized boolean — treating it as off" >&2
+    ;;
+esac
+
 if [[ -n "${VNC_PASSWORD}" ]]; then
   WAYVNC_CFG="/tmp/wayvnc.cfg"
 
