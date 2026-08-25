@@ -14,7 +14,23 @@ include:
 
 services:
   studio:
+    # code-docker의 netinit-docker(호스트측 에이전트)가 이 컨테이너를 자기 관리 대상으로
+    # 인식하게 하는 opt-in 라벨. 이 라벨 하나가 전부고, 게이트웨이가 어디인지는 여기가
+    # 아니라 네트워크 쪽(code-docker의 docker-compose.yml에 있는 code-docker-internal의
+    # netinit.gateway 라벨)이 선언한다 - studio처럼 여러 망에 붙은 컨테이너도 "게이트웨이를
+    # 선언한 망"이 곧 egress 경로라 컨테이너 쪽에 따로 쓸 게 없고, 게이트웨이를 선언하지
+    # 않은 망(아래 roblox-studio-vnc)은 워크로드가 붙어도 egress 경로가 되지 않는다.
+    # 매칭은 fail-closed - 라벨이 없으면 어떤 에이전트도 이 컨테이너를 건드리지 않는다.
+    labels:
+      netinit.provider: "${PREFIX:-}code-docker-netinit-docker"
     environment:
+      # 위 라벨의 짝. netinit-docker는 호스트 쪽에서 도는 에이전트라 이 컨테이너가 뜬
+      # *뒤에* 라우트를 심을 수밖에 없으므로, entrypoint.sh가 default route가 생길 때까지
+      # 막고 기다린다(권한 불필요, 읽기 전용). 안 그러면 Studio가 egress 정책이 자리잡기
+      # 전에 이미 돌고 있는 창이 생기고, Studio는 HTTPService/플러그인으로 임의 아웃바운드가
+      # 되는 물건이라 그 창이 곧 router 경계의 구멍이다. 단독 실행(router 없음)에서는
+      # 기다릴 provider가 없으므로 entrypoint 쪽 기본값이 off고, 이 오버레이에서만 켠다.
+      NETINIT_WAIT: "true"
       # wayvnc가 0.0.0.0 대신 이 별칭이 resolve된 IP에만 바인딩하게 함 (fail-closed -
       # entrypoint.sh 쪽 wayvnc-service.sh 참고). 아래 networks.roblox-studio-vnc.aliases와
       # 반드시 일치해야 함 - studio 자신의 이름이 아니라 roblox-studio-vnc 위에서만
@@ -53,32 +69,20 @@ services:
     # `docker compose config`로 직접 확인함 - 빈 리스트 하나만 필요하므로 여기선 그게 맞는
     # 태그.)
     ports: !reset []
-  # code-docker/dind와 동일한 netinit 패턴 - studio는 code-docker와 같은 신뢰 등급의
-  # 개발용 컨테이너로 취급한다(Roblox Studio 자체에 HTTPService/plugin 권한이 있어
-  # 임의 아웃바운드가 가능함) - /dev/dri 때문에 별도 컨테이너로만 분리했을 뿐 네트워크
-  # 처우는 code-docker와 같게 간다는 결정 (2026-08-13, code-docker 쪽
-  # roblox-studio-vnc-isolation-plan.md 참고). studio가 code-docker-internal에도
-  # 붙어 있으므로(Phase 1) ROUTER_HOSTNAME은 code-docker 쪽이 이미 그 네트워크에 걸어둔
-  # "router" 별칭을 그대로 재사용 - roblox-studio-vnc 쪽에 별도 별칭을 추가할 필요
-  # 없음(router가 어느 인터페이스로 studio의 다음 홉을 받든 자기 자신의 라우팅
-  # 테이블로 알아서 올바르게 처리함 - code-docker 쪽에서 실측 확인됨).
-  studio-netinit:
-    build:
-      context: netinit
-    network_mode: service:studio
-    cap_add:
-      - NET_ADMIN
-    environment:
-      ROUTER_HOSTNAME: "${ROUTER_HOSTNAME:-router}"
-    depends_on:
-      studio:
-        condition: service_started
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+  # (구) studio-netinit 사이드카는 제거됨 - code-docker의 netinit-docker(호스트측
+  # 라벨 기반 에이전트)가 그 역할을 대신한다. 이유: `network_mode: service:studio`는
+  # 컴포즈가 studio의 *컨테이너 ID*로 고정해서 저장하기 때문에, studio가 제자리 restart가
+  # 아니라 recreate(새 ID)되는 순간 사이드카가 사라진 netns에 붙으려다 영구히 시작 실패
+  # 상태가 된다("No such container: <old-id>"). 게다가 studio 자신은 계속 Up이라 아무
+  # 신호 없이 조용히 인터넷만 끊긴다 - 2026-08-25에 실제로 9시간 동안 그 상태였다.
+  # netinit-docker는 컨테이너 ID를 붙잡아두는 지점이 없어서(매 사이클 SandboxKey 재조회)
+  # 이 실패 클래스 자체가 없다. 설계 전문은 code-docker 쪽
+  # .claude/backlog/netinit-docker-plan.md 참고.
+  #
+  # 사이드카가 갖고 있던 NET_ADMIN이 studio로 옮겨간 게 아니라는 점이 중요하다 - studio는
+  # 여전히 capability가 0개이고, 라우트를 심는 권한은 컨테이너 바깥에만 있다. 그 분리가
+  # 이 구조의 목적 전부다.
+
   # code-docker 쪽에 이미 정의된 서비스에 필드만 추가 병합 (include 병합은 서비스
   # 이름 기준으로 동작 - "이 파일에서 정의한 서비스만" 이라는 제약 없음, code-docker
   # 쪽에서 실측 검증됨). router가 roblox-studio-vnc에도 붙어야 forwards:로
@@ -93,22 +97,34 @@ networks:
   # agent 컨테이너(code-docker/dind)는 절대 못 붙는, VNC 전용 격리망 - router만
   # studio와 같이 붙어서 사람에게 VNC를 중계한다("국경은 router만" 원칙, code-docker
   # 쪽 CLAUDE.md 참고). name: 없이 두면 Compose가 프로젝트 이름을 붙여
-  # "code-docker_roblox-studio-vnc"로 만드는데, code-docker 쪽
-  # NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS(example-env 참고)는 netfilter-fix가
-  # `docker network inspect`로 그대로 찾아볼 수 있는, compose가 최종적으로 만든 실제
-  # 이름을 기대한다(code-docker-internal/external 자신이 늘 그렇듯) - 이 network만
-  # 예외가 되지 않도록 명시적으로 이름을 고정한다(실측 확인: 2026-08-18,
-  # code-docker-netfilter-fix가 이 이름 없이는 "not up yet"만 반복 출력).
-  #
-  # ${PREFIX}도 code-docker 자신의 네트워크(code-docker-internal 등)와 동일하게
-  # 여기 꿰어 넣는다 - 안 그러면 PREFIX가 다른 code-docker 인스턴스 두 개가 각자
-  # roblox-studio-docker를 연동해도 이 network 하나를 공유해버려서(둘 다 그냥
-  # "roblox-studio-vnc"), 서로 다른 배포의 router/studio가 같은 VNC 격리망에
-  # 섞이게 된다. 이 값은 code-docker 쪽 최상위 `.env`(docker compose를 실행하는
-  # 디렉터리)에서 substitution되므로, ootb.sh로 연동했다면 ootb-extra.sh가
-  # NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS에 같은 PREFIX를 붙여서 저장해준다
-  # (ootb-manifest.env의 OOTB_EXTRA_INTERNAL_NETWORKS 참고) - 수동 연동이라면
-  # 사람이 직접 두 값을 맞춰야 한다.
+  # "code-docker_roblox-studio-vnc"로 만든다 - 아래 `netinit.exempt-forward` 라벨
+  # 경로(현재 기본)는 이름과 무관하게 라벨 필터로 이 네트워크를 찾아내므로 그 자체는
+  # 더 이상 이름 고정을 요구하지 않지만, ${PREFIX}도 code-docker 자신의 네트워크
+  # (code-docker-internal 등)와 동일하게 여기 꿰어 넣어야 하는 이유는 남아있다 - 안
+  # 그러면 PREFIX가 다른 code-docker 인스턴스 두 개가 각자 roblox-studio-docker를
+  # 연동해도 이 network 하나를 공유해버려서(둘 다 그냥 "roblox-studio-vnc"), 서로
+  # 다른 배포의 router/studio가 같은 VNC 격리망에 섞이게 된다. 아직 라벨로 옮기지
+  # 않은 매니페스트를 위한 호환 경로(`NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS`,
+  # example-env 참고)는 여전히 compose가 만든 실제 이름을 `docker network inspect`로
+  # 그대로 찾아보는 방식이라, 그 경로를 쓰는 동안은 이름 고정이 필수다(실측 확인:
+  # 2026-08-18, 옛 code-docker-netfilter-fix가 이 이름 없이는 "not up yet"만 반복
+  # 출력). 이 값은 code-docker 쪽 최상위 `.env`(docker compose를 실행하는
+  # 디렉터리)에서 substitution되므로, ootb.sh로 연동했고 아직 호환 경로를 쓰고
+  # 있다면 ootb-extra.sh가 NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS에 같은 PREFIX를
+  # 붙여서 저장해준다(ootb-manifest.env의 OOTB_EXTRA_INTERNAL_NETWORKS 참고) - 수동
+  # 연동이라면 사람이 직접 두 값을 맞춰야 한다.
   roblox-studio-vnc:
     name: "${PREFIX:-}roblox-studio-vnc"
     internal: true
+    # code-docker 쪽 .env의 NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS를 대체한다. 예전에는
+    # 이 망의 이름을 code-docker의 .env에 손으로 적어줘야 했는데 - 형제 프로젝트를 붙일
+    # 때마다 code-docker 쪽 파일을 고치는 건 EXTRA_INCLUDE가 없애려던 결합 그 자체였다 -
+    # 이제 필요한 쪽이 자기 망에 직접 선언한다. ootb-extra.sh가 PREFIX를 그 env에 맞춰
+    # 넣어주던 동기화도 이걸로 불필요해진다.
+    #
+    # netinit.gateway는 일부러 없다: 여기는 사람에게 VNC를 중계하는 격리망이지 egress
+    # 경로가 아니고, 게이트웨이를 선언하지 않은 망은 netinit-docker가 라우트 대상으로
+    # 삼지 않는다.
+    labels:
+      netinit.provider: "${PREFIX:-}code-docker-netinit-docker"
+      netinit.exempt-forward: "true"

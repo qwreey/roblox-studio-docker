@@ -151,6 +151,42 @@ forward 트래픽에 SNAT을 걸어 studio가 항상 router만 보게 하는 대
 /router/api/netgate/forwards -d '{"hostPort":5900,"targetHost":"vnc-only",
 "targetPort":5900}'`로 해봤고 정상 동작했다.
 
+> **2026-08-25 업데이트 — 위 "해결책"(`netinit` 사이드카, `studio-netinit` 서비스)은
+> 대체됨. 이 절 자체의 기록(당시 결정과 근거)은 정정하지 않고 그대로 둔다 - 아래는
+> 무엇이, 왜 바뀌었는지만 추가로 남기는 note.**
+>
+> `network_mode: service:studio`는 컴포즈가 studio의 *컨테이너 ID*를 생성 시점에
+> 고정해서 저장한다. studio가 제자리 restart가 아니라 recreate(새 ID)되면
+> `studio-netinit`이 사라진 netns에 붙으려다 시작 자체가 영구히 실패하는데
+> (`No such container: <old-id>`, `restart: unless-stopped`가 죽은 ID를 상대로
+> 재시도만 반복), studio 자신은 계속 `Up`이라 아무 신호 없이 조용히 인터넷만
+> 끊긴다 - 2026-08-25에 실제로 9시간 동안 그 상태였고, 이게 재설계의 계기.
+>
+> `roblox-studio-code-docker.yml`에서 `studio-netinit` 서비스는 완전히 제거됐다.
+> 같은 역할은 이제 code-docker 쪽 `code-docker-netinit-docker`(호스트 netns에서 도는
+> 에이전트, 옛 `code-docker-netfilter-fix`, upstream은
+> `qwreey/router-docker-client`의 `netinit-docker/`, `netfilter-fix/`에서 개명)가
+> 맡는다 - 컨테이너 ID를 붙잡아두는 지점이 없이 매 reconcile 사이클마다 대상의
+> `SandboxKey`를 재조회하므로 위 실패 클래스가 구조적으로 발생하지 않는다(실측
+> 확인됨). 설정 방식도 code-docker의 `.env`(`CODE_DOCKER_EXTRA_INTERNAL_NETWORKS`,
+> 아래 "2026-08-18" 절에서 쓰인 값 - 지금은 `NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS`로
+> 개명되어 있고, 그마저 deprecated지만 한 주기는 폴백으로 유지됨)에서 Docker
+> 라벨로 바뀌었다: `studio`엔 opt-in `netinit.provider` 라벨 하나, 게이트웨이 여부는
+> 컨테이너가 아니라 *네트워크*(`code-docker-internal`의 `netinit.gateway`)가
+> 선언한다. `roblox-studio-vnc`는 `netinit.provider`/`netinit.exempt-forward`는
+> 갖되 `netinit.gateway`는 일부러 없음 - egress 경로가 아니라 VNC 전용 격리망이라는
+> 뜻.
+>
+> **바뀌지 않은 것**: studio의 capability는 여전히 0개다. `studio-netinit`이 갖고
+> 있던 `NET_ADMIN`이 studio로 옮겨간 게 아니라 그냥 없어졌다 - 라우트를 심는 권한은
+> 여전히 studio 바깥(이제는 호스트측 에이전트)에만 있다. 대신 호스트측 에이전트는
+> 구조상 studio 컨테이너가 뜬 *뒤에만* 개입할 수 있으므로, `entrypoint.sh`에
+> fail-closed 대기(`NETINIT_WAIT`/`NETINIT_WAIT_TIMEOUT`, 기본 off - 단독 실행엔
+> 기다릴 provider가 없음 - `roblox-studio-code-docker.yml`이 켬)가 새로 추가됐다.
+> 설계 전문, 기각된 대안, 실측 근거는 code-docker 쪽
+> `.claude/backlog/netinit-docker-plan.md` 참고. 이 repo의 로컬 `netinit/` 사본은
+> 더 이상 어떤 compose 파일에서도 참조되지 않아 삭제했다(2026-08-25).
+
 ## 2026-08-18 — 실제 end-to-end 테스트 결과
 
 `code-docker/extra-include.yml` (`path: ../roblox-studio-docker/roblox-studio-code-docker.yml`,

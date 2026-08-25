@@ -518,6 +518,21 @@ network B has no route to network A's subnet unless also attached to A), not jus
   the variable). **Unset by default** in the root `docker-compose.yml` (passed through as
   `VNC_BIND_ALIAS: "${VNC_BIND_ALIAS:-}"`), which reproduces today's exact `0.0.0.0`
   behavior — zero regression to the working Milestone 1-3 standalone setup.
+- **`NETINIT_WAIT` / `NETINIT_WAIT_TIMEOUT`** (`entrypoint.sh`, added 2026-08-25 as part
+  of the netinit-docker migration above): when `NETINIT_WAIT=true`, `entrypoint.sh`
+  blocks before starting the rest of the container until `ip route show default` shows
+  a route, polling every 2s up to `NETINIT_WAIT_TIMEOUT` seconds (default `60`). On
+  timeout it `exit 1`s — fail-closed, so `restart: unless-stopped` retries rather than
+  letting Studio run with no egress policy in place. Needed only because a host-side
+  agent (code-docker's `code-docker-netinit-docker`) can plant the route only *after*
+  this container has started, leaving a window where Studio would otherwise be up with
+  arbitrary outbound (HTTPService/plugins) and no netgate in front of it yet.
+  **`NETINIT_WAIT` defaults to `false`** so this project keeps working standalone
+  (detached from code-docker) with zero configuration — there's no provider to wait for
+  in that case. `roblox-studio-code-docker.yml` sets it `true`; a plain
+  `docker-compose.yml` run never sees it change. Turning it off is never "skip the
+  wait even though a provider exists" — it only ever means "this deployment has no
+  provider to wait for" (a standalone run), which doesn't weaken the fail-closed rule.
 - **`poc/code-docker-integration/`**: a self-contained proof-of-concept, entirely within
   this repo, that mimics code-docker's relevant network shape with two mock `sleep
   infinity` containers (`router-mock`, `code-docker-mock`) standing in for code-docker's
@@ -575,16 +590,51 @@ even apply to this traffic pattern (router relaying directly between two bridges
 a member of bypasses that chain entirely — confirmed via `nft` counters staying at
 zero through a successful connection). The actual blocker was that `internal: true`
 networks get no default gateway route at all, so `studio` had no way to route a reply
-back to the original client — fixed by giving `studio` the same netinit-sidecar
-pattern code-docker/dind already use (`netinit/` in this repo, vendored from
-code-docker's own `netinit/` subtree — new `studio-netinit` service, `network_mode:
-service:studio` + `NET_ADMIN`, keeps studio's default route pointed at router). See
-`code-docker-integration-plan.md`'s "2026-08-18 — 실제 end-to-end 테스트 결과"
-section for the full real-run results (RFB banner received through router's forward,
-isolation confirmed via `Connection refused` from code-docker, plus a real
-`roblox-studio-vnc` network-naming bug found and fixed). code-docker's repo needed
+back to the original client — fixed originally (2026-08-13/14) by giving `studio` the
+same netinit-sidecar pattern code-docker/dind already use (`netinit/` in this repo,
+vendored from code-docker's own `netinit/` subtree — new `studio-netinit` service,
+`network_mode: service:studio` + `NET_ADMIN`, keeps studio's default route pointed at
+router). See `code-docker-integration-plan.md`'s "2026-08-18 — 실제 end-to-end 테스트
+결과" section for the full real-run results from that era (RFB banner received through
+router's forward, isolation confirmed via `Connection refused` from code-docker, plus a
+real `roblox-studio-vnc` network-naming bug found and fixed). code-docker's repo needed
 zero code changes for this feature specifically (its earlier `EXTRA_INCLUDE`/
 `include:` plumbing from Phase 1 was all that was needed).
+
+**Superseded 2026-08-25 — the `studio-netinit` sidecar is gone, replaced by a
+host-side, label-driven agent on the code-docker side.** `network_mode: service:studio`
+made Compose pin the sidecar to studio's *container ID* at create time; a studio
+*recreate* (new ID) left the sidecar permanently orphaned — "joining network namespace
+of container: No such container: `<old-id>`", retried forever under
+`restart: unless-stopped` — while studio itself stayed `Up` with silently no default
+route and therefore no internet. This actually happened: studio had been in that state
+for 9 hours before anyone noticed. `roblox-studio-code-docker.yml` no longer defines
+`studio-netinit` at all; the same job is now done by `code-docker-netinit-docker`
+(formerly `code-docker-netfilter-fix`, upstream `netinit-docker/` in
+`qwreey/router-docker-client`, renamed from `netfilter-fix/`), a Docker-labels-driven
+agent living entirely on the code-docker side that re-resolves each managed container's
+network namespace (`SandboxKey`) every reconcile cycle instead of holding a stale
+container-ID handle — the failure class above is structurally impossible for it.
+Configuration moved from code-docker's own `.env`
+(`NETFILTER_FIX_EXTRA_INTERNAL_NETWORKS`, deprecated but still honored as a one-cycle
+fallback) to Docker labels this repo's own `roblox-studio-code-docker.yml` declares
+directly: `studio` carries an opt-in `netinit.provider` label (that's the whole
+contract on the workload side — which network is the egress path is declared by the
+*network*, not the container, via `netinit.gateway`), and `roblox-studio-vnc` carries
+`netinit.provider`/`netinit.exempt-forward` but deliberately **no** `netinit.gateway`,
+so it's never treated as an egress path — only `code-docker-internal` declares one.
+**Capability separation is unchanged**: studio still has **zero** capabilities;
+`NET_ADMIN` never moved into studio. The route is planted from outside its network
+namespace by an agent studio cannot reach — that separation (Studio can make arbitrary
+outbound requests via HTTPService/plugins, so it must not be able to rewrite its own
+default route past router's netgate) is the entire reason this design exists, sidecar
+or agent. Because the host-side agent can only act *after* studio's container has
+started, `entrypoint.sh` now has a fail-closed wait for the default route
+(`NETINIT_WAIT`, `NETINIT_WAIT_TIMEOUT` — see below) closing the window where Studio
+could otherwise run unrouted for a moment. Full design/rationale, rejected
+alternatives, and the live measurements behind it: code-docker's
+`.claude/backlog/netinit-docker-plan.md`. The local `netinit/` copy in this repo's own
+root was unreferenced by any compose file and has been deleted (2026-08-25).
 
 **`MCP_PORT` is not host-published once integrated with code-docker, and that's
 correct, not a gap (owner decision, 2026-08-18).** In this topology `studio` ends up

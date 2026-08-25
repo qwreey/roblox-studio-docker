@@ -22,6 +22,42 @@ rm -rf "${XDG_RUNTIME_DIR}"
 mkdir -p "${XDG_RUNTIME_DIR}"
 chmod 700 "${XDG_RUNTIME_DIR}"
 
+# Wait for this container's default route before starting anything, when a network
+# provider (code-docker's netinit-docker, see that project's
+# .claude/backlog/netinit-docker-plan.md) is responsible for planting it. That agent runs
+# on the host side and necessarily acts *after* this container has started, so without
+# this wait there is a window in which Studio is already running with no egress policy in
+# place - and Roblox Studio can make arbitrary outbound requests (HTTPService, plugins),
+# which is exactly what the router boundary exists to constrain. Blocking here is what
+# turns that race into a bounded wait.
+#
+# Deliberately fail-closed: if the route never appears we exit non-zero so
+# `restart: unless-stopped` retries, rather than warning and carrying on unrouted. Note
+# this needs no capability of its own - reading `ip route` is unprivileged; only the
+# provider needs NET_ADMIN, and it lives outside this container on purpose.
+#
+# Off by default so this project still runs standalone, detached from code-docker, with
+# no configuration at all (there is no router to wait for in that case). The code-docker
+# overlay - roblox-studio-code-docker.yml - turns it on. The toggle does not weaken the
+# fail-closed rule above: it says "this deployment has no provider to wait for", not
+# "skip the wait even though one exists".
+if [[ "${NETINIT_WAIT:-false}" == "true" ]]; then
+	netinit_wait_timeout="${NETINIT_WAIT_TIMEOUT:-60}"
+	netinit_waited=0
+	while ! ip route show default 2>/dev/null | grep -q .; do
+		if (( netinit_waited >= netinit_wait_timeout )); then
+			echo >&2 "entrypoint: no default route after ${netinit_wait_timeout}s - the netinit provider never planted one. Refusing to start Studio unrouted; exiting so restart: unless-stopped retries."
+			exit 1
+		fi
+		if (( netinit_waited == 0 )); then
+			echo "entrypoint: waiting for the netinit provider to plant a default route..."
+		fi
+		sleep 2
+		netinit_waited=$(( netinit_waited + 2 ))
+	done
+	echo "entrypoint: default route present ($(ip route show default | head -1)) - continuing"
+fi
+
 export WLR_BACKENDS=headless
 export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_RENDERER="${WLR_RENDERER:-gles2}"

@@ -227,6 +227,19 @@ container actually boots and it's clear what needs to be overridable.
   완료" section. Still open: a real end-to-end run with the actual Studio image and a
   VNC client, not done yet (config/component-level only so far).
 
+  **2026-08-25 업데이트 — `studio-netinit` 사이드카는 대체됨, 이 항목의 나머지 기록은
+  그대로 유지.** `network_mode: service:studio`가 studio의 *컨테이너 ID*를 생성
+  시점에 고정해서, studio가 recreate(새 ID)되면 사이드카가 사라진 netns에 붙으려다
+  영구히 시작 실패 상태로 남는 문제가 실제로 발생함(9시간 동안 조용히 인터넷 끊김,
+  아무도 못 알아챔). `roblox-studio-code-docker.yml`에서 `studio-netinit` 서비스
+  자체가 제거됐고, 같은 역할을 code-docker 쪽 `code-docker-netinit-docker`(호스트측,
+  라벨 기반 에이전트, 옛 `code-docker-netfilter-fix`)가 대신한다 - 컨테이너 ID를
+  붙잡아두지 않고 매 사이클 재조회하므로 위 실패 클래스가 구조적으로 없음. studio의
+  capability는 여전히 0개(`NET_ADMIN`이 studio로 옮겨간 게 아님)이고, 대신
+  `entrypoint.sh`에 `NETINIT_WAIT` fail-closed 대기가 추가됨. 설계 전문: code-docker
+  `.claude/backlog/netinit-docker-plan.md`. 자세한 서술은 `CLAUDE.md`의 "Future
+  code-docker integration" 절 참고.
+
 ### 8. Studio MCP bridge — done, 2026-08-13
 - Roblox Studio's built-in MCP server (stdio-only, single-machine by design) bridged out
   over the network: `supergateway` (stdio↔Streamable HTTP) + `caddy` (bearer-token auth,
