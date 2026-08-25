@@ -381,6 +381,46 @@ can be told to offer a subtype noVNC supports; patching in a VeNCrypt TLS subtyp
 noVNC side; or simply standardizing on tinyauth as documented above and treating wayvnc's
 own auth as native-client-only.
 
+## Crash: a 0x0 remote-resize request kills wayvnc and the container — patched 2026-08-25
+
+Found while code-docker's router switched its noVNC viewer from `resize=scale` to
+`resize=remote`. With remote resizing on, noVNC forwards its own viewport size to the
+server as an RFB `SetDesktopSize`, **with no lower bound of its own** — a viewer laid out
+at 0x0 (an iframe hidden with `display:none`, a page that never got a layout pass) duly
+asks for a 0x0 desktop. wayvnc passes it straight through as a wlr-output-management
+custom mode; wlroots rejects any mode with width/height ≤ 0 as a **protocol error**, and
+libwayland treats a protocol error as fatal. `wayvnc -L debug`, verbatim:
+
+```
+Client resolution changed: 0x0, capturing output HEADLESS-1 which is headless: yes
+Client requested resize to 0x0, result: 4
+[destroyed object]: error 3: invalid custom mode
+ERROR: ../wayvnc/src/wayland.c: 269: Failed to dispatch pending
+```
+
+wayvnc then exits **0**, `critical-watchdog` correctly shuts the whole container down, and
+because the offending client reconnects on its own (`reconnect=1`), the container comes
+back, gets asked for 0x0 again, and dies again — a restart loop that only ends when that
+client is closed. Observed for real: 30+ `RestartCount` in a few minutes off a single
+browser tab.
+
+Fixed in the `Dockerfile` by patching the vendored noVNC (`core/rfb.js`,
+`_requestRemoteResize`) to skip any request below 1x1 — see that RUN's own comment,
+including why it's a `sed` with a `test` guard rather than a patch file (a
+`NOVNC_VERSION` bump that moves the code must fail the build, not silently drop the
+guard). Verified before/after against a live session: unpatched, hiding the viewer logged
+`Client requested resize to 0x0` and killed wayvnc; patched, the same action produces no
+request at all and wayvnc stays up, while a normal resize (1920x1080 → 960x634) still
+works.
+
+**The guard is client-side, so it only covers clients served by this container.** wayvnc
+itself is still fatal-on-bad-mode for any *other* client that asks for 0x0 — including a
+browser tab still running the pre-patch `rfb.js` from before a rebuild, which has to be
+reloaded before it stops killing the container. Nothing in wayvnc clamps this
+(`-R`/`--disable-resizing` is all-or-nothing), and making wayvnc's death non-fatal would
+mean undoing this project's deliberate "container dies if wayvnc dies" design (see
+`critical-watchdog`) — so this is knowingly a mitigation, not a complete fix.
+
 ## `VNC_GPU`: wayvnc `--gpu` is opt-in, and measurably a no-op for noVNC here — 2026-08-25
 
 `VNC_GPU` (docker-compose env → `wayvnc-service.sh`) adds wayvnc's own `--gpu` flag

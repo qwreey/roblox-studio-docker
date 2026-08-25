@@ -82,6 +82,30 @@ RUN curl -fsSL "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSIO
     && tar xzf /tmp/websockify.tar.gz -C /opt/websockify --strip-components=1 \
     && rm /tmp/websockify.tar.gz
 
+# noVNC hardening: never ask the server for a 0x0 desktop. With remote resizing on
+# (noVNC's `resize=remote`, which is what code-docker-router's VNC tab now defaults to)
+# noVNC forwards its own viewport size to the server as an RFB SetDesktopSize request,
+# with no lower bound of its own - and a viewer that is laid out at 0x0 (an iframe hidden
+# with display:none, a page that never got a layout pass) duly requests 0x0. wayvnc then
+# passes that straight through as a wlr-output-management custom mode, wlroots rejects
+# any mode with width/height <= 0 as a *protocol error*, and libwayland treats a protocol
+# error as fatal: wayvnc dies, critical-watchdog sees it and shuts the whole container
+# down, and a client that reconnects on its own turns that into a restart loop. Observed
+# for real (2026-08-25, `wayvnc -L debug`):
+#
+#   Client resolution changed: 0x0, capturing output HEADLESS-1 which is headless: yes
+#   Client requested resize to 0x0, result: 4
+#   [destroyed object]: error 3: invalid custom mode
+#   ERROR: ../wayvnc/src/wayland.c: 269: Failed to dispatch pending
+#
+# Requesting a 0x0 desktop is meaningless in the first place, so the guard goes in
+# unconditionally rather than being made configurable. Kept as a sed rather than a
+# vendored patch file because it's one line and has to survive a NOVNC_VERSION bump
+# legibly - the trailing `test` is what makes a bump that moves this code *fail the
+# build* instead of silently dropping the guard.
+RUN sed -i '/_requestRemoteResize() {/,/^    }$/ s#^\( *\)const size = this\._screenSize();#\1const size = this._screenSize();\n\1// PATCHED (roblox-studio-docker): never request a 0x0 desktop - see Dockerfile.\n\1if (size.w < 1 || size.h < 1) { return; }#' /opt/novnc/core/rfb.js \
+    && test "$(grep -c 'PATCHED (roblox-studio-docker)' /opt/novnc/core/rfb.js)" = 1
+
 # Default browser for xdg-desktop-portal's OpenURI (used by Vinegar's "Login via
 # Browser" flow). Everything in this container runs as root (no non-root user set up),
 # and Chromium's zygote sandbox refuses to start as root without --no-sandbox — so the
