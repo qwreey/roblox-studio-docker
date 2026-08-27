@@ -42,6 +42,7 @@ RUN pacman -Syu --noconfirm --needed \
       npm \
       caddy \
       supervisor \
+      dnsmasq \
       python \
     && pacman -Scc --noconfirm \
     && rm -rf /var/cache/pacman/pkg/*
@@ -143,7 +144,8 @@ RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh
 # directory for a stdout_logfile/stderr_logfile path itself — matches code-docker's own
 # Dockerfile, which does the same for the same reason.
 RUN mkdir -p /etc/roblox-studio/supervisord.d \
-      /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog
+      /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog \
+      /var/log/dns-local
 COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
 COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
 COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
@@ -153,7 +155,22 @@ COPY config/supervisor/wayvnc-service.sh /etc/roblox-studio/wayvnc-service.sh
 COPY config/supervisor/novnc-service.sh /etc/roblox-studio/novnc-service.sh
 COPY config/supervisor/mcp-bridge-service.sh /etc/roblox-studio/mcp-bridge-service.sh
 COPY config/supervisor/critical-watchdog-service.sh /etc/roblox-studio/critical-watchdog-service.sh
+COPY config/supervisor/dns-local-service.sh /etc/roblox-studio/dns-local-service.sh
 RUN chmod +x /etc/roblox-studio/*-service.sh
+
+# qwreey/router-docker-client's own subdirectories, fetched directly at build
+# time (floating #main ref, see that repo's own CLAUDE.md) rather than
+# vendored - the same way code-docker pulls them in.
+#
+# dns-local is what gives this container working DNS when it's attached to
+# code-docker's `internal: true` networks; see config/supervisor/
+# dns-local-service.sh for why it's needed and why pointing at router alone
+# would break VNC_BIND_ALIAS. netshare comes along only for its wait_until
+# helper, which dns-local uses for a bounded, well-logged first wait on
+# router (it retries fine without it, the log is just less obvious).
+ADD https://github.com/qwreey/router-docker-client.git#main:dns-local /etc/roblox-studio/router-client/dns-local
+ADD https://github.com/qwreey/router-docker-client.git#main:netshare /etc/roblox-studio/router-client/netshare
+RUN chmod +x /etc/roblox-studio/router-client/dns-local/dns-local.sh
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

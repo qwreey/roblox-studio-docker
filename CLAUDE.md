@@ -457,6 +457,51 @@ resizes (`wlr-randr` confirmed). What was missing was purely on the *viewer* sid
 code-docker's router hardcoded `resize=scale` in the noVNC URL; that's now a per-target
 setting there (see its `router/docs/vnc.md`).
 
+## DNS behind router: `dns-local` — added 2026-08-27
+
+Attached to code-docker (`roblox-studio-code-docker.yml`) this container sits on
+`internal: true` networks only. Docker's embedded DNS (`127.0.0.11`) still resolves
+same-network names there — `vnc-only`, `router`, `studio` — but has no route to forward
+anything else, and answers those with an **immediate, definitive SERVFAIL** rather than a
+timeout. Nothing here had ever written a second nameserver, so this container simply had
+no external DNS: measured on the live deployment, 0/15 lookups of
+`clientsettings.roblox.com`, and Vinegar failing at launch with
+
+```
+setup: fetch: user: Get "https://clientsettings.roblox.com/v2/user-channel?...":
+dial tcp: lookup clientsettings.roblox.com: Temporary failure in name resolution
+```
+
+The fix is a `dns-local` supervisord program (`config/supervisor/dns-local-service.sh`,
+`priority=5`) wrapping
+[qwreey/router-docker-client](https://github.com/qwreey/router-docker-client)'s shared
+`dns-local/`, fetched at build time like any other piece of that kit. It runs a local
+`dnsmasq --strict-order` with `127.0.0.11` and router as its two upstreams and points
+`/etc/resolv.conf` at *itself* alone.
+
+Three things about that shape are load-bearing and easy to get wrong:
+
+- **Two `nameserver` lines in `resolv.conf` are not a fix.** Only resolvers that retry
+  past a definitive SERVFAIL fail over — glibc's NSS does (`getent`), `dig` and Node's
+  runtime don't. code-docker learned this the hard way first (its own
+  `.claude/archive/dns-local-servfail-fix-done.md`) and this container would have
+  inherited the same half-fix.
+- **Pointing at router alone is not a fix either.** `wayvnc-service.sh` and
+  `novnc-service.sh` resolve `VNC_BIND_ALIAS` (`vnc-only`) with `getent` and **fail
+  closed** if it doesn't resolve — deliberately, since a silent `0.0.0.0` fallback would
+  defeat the network segmentation. router's dnsmasq doesn't know compose aliases, so both
+  upstreams are genuinely required. That is the whole reason a local strict-order
+  forwarder exists instead of a `resolv.conf` line.
+- **`--strict-order` itself.** Without it dnsmasq's default "fastest responder wins"
+  picks `127.0.0.11`'s instant bogus SERVFAIL every time — worse than doing nothing.
+
+`DNS_LOCAL_ENABLED` defaults to **false** here, unlike the shared script's own default:
+standalone `docker compose up` has a working `127.0.0.11` and no router to forward to.
+The code-docker overlay turns it on, exactly the same opt-in shape `NETINIT_WAIT` uses.
+Deliberately *not* in `critical-watchdog.conf`'s `CRITICAL_PROGRAMS` — a resolver blip
+must never take the whole stack down, and its own upkeep loop already survives router
+being recreated (router's IP isn't stable across recreates; it's re-resolved every 5s).
+
 ## Key constraints to keep in mind while building
 
 - **GPU is a hard requirement, not a nice-to-have**, for Roblox Studio's DXVK/native-Vulkan

@@ -31,6 +31,17 @@ services:
       # 되는 물건이라 그 창이 곧 router 경계의 구멍이다. 단독 실행(router 없음)에서는
       # 기다릴 provider가 없으므로 entrypoint 쪽 기본값이 off고, 이 오버레이에서만 켠다.
       NETINIT_WAIT: "true"
+      # 이 컨테이너는 code-docker 쪽에 붙으면 `internal: true` 네트워크에만 올라가고,
+      # 거기서 Docker 내장 DNS(127.0.0.11)는 같은 네트워크 이름만 답하고 그 밖의 이름은
+      # 즉시 확정적 SERVFAIL로 거절한다 - 포워딩할 경로가 없으니까. 그래서 외부 DNS가
+      # 통째로 없어지고(실측 2026-08-27: clientsettings.roblox.com 15회 전부 실패),
+      # Vinegar가 "Temporary failure in name resolution"으로 기동에 실패한다.
+      # dns-local은 127.0.0.11과 router를 strict-order로 물린 로컬 dnsmasq를 띄워
+      # 이걸 한 곳에서 해결한다 - router만 가리키면 안 되는 이유(VNC_BIND_ALIAS가
+      # getent로 fail-closed 바인딩한다)까지 config/supervisor/dns-local-service.sh 참고.
+      # 단독 실행에는 router가 없으므로 그쪽 기본값은 off고, 이 오버레이에서만 켠다 -
+      # 위 NETINIT_WAIT과 정확히 같은 모양.
+      DNS_LOCAL_ENABLED: "true"
       # wayvnc가 0.0.0.0 대신 이 별칭이 resolve된 IP에만 바인딩하게 함 (fail-closed -
       # entrypoint.sh 쪽 wayvnc-service.sh 참고). 아래 networks.roblox-studio-vnc.aliases와
       # 반드시 일치해야 함 - studio 자신의 이름이 아니라 roblox-studio-vnc 위에서만
