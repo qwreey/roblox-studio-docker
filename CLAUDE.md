@@ -260,6 +260,17 @@ taskbar:
   elsewhere in this file: some GTK-ish UI in this stack treats a first click as
   focus/select-only). Real VNC clients handle this fine (a normal double-click); only
   scripted single-click-based test tooling needs to account for it.
+- **The menu button toggles rather than launching directly** (`config/wm/wofi-toggle.sh`
+  → `/etc/xdg/labwc/wofi-toggle.sh`, added 2026-08-28). Waybar's `on-click` used to be
+  `wofi --show drun` verbatim, so every click spawned another launcher stacked on the
+  last one — clicking the button N times gave N identical menus (measured in a live
+  container: 1 → 2 → 3 wofi processes on three clicks). wofi has no single-instance
+  mode of its own, and the usual saving grace — wofi closing on focus loss — never
+  fires here because the click that takes focus away lands on waybar's own *layer
+  surface*, not a real window, so the open wofi keeps keyboard focus and simply gets
+  buried. The wrapper is a one-liner (`pkill -x wofi || exec wofi --show drun`), which
+  also gets normal start-menu behavior for free: a second click closes the menu.
+  Verified in a live container — five clicks alternate 1/0/1/0/1, never 2.
 
 ## Crash-loop bug: stale Wayland socket survives `docker restart` — fixed 2026-08-12
 

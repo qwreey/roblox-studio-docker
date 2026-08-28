@@ -8,7 +8,7 @@
 
   "custom/launcher": {
     "format": "☰ Menu",
-    "on-click": "wofi --show drun",
+    "on-click": "/etc/xdg/labwc/wofi-toggle.sh",
     "tooltip": false
   },
 

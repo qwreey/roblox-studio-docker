@@ -150,8 +150,9 @@ COPY config/wm/labwc-menu.xml /etc/xdg/labwc/menu.xml
 COPY config/wm/labwc-autostart /etc/xdg/labwc/autostart
 COPY config/wm/waybar-config.jsonc /etc/xdg/labwc/waybar-config.jsonc
 COPY config/wm/waybar-style.css /etc/xdg/labwc/waybar-style.css
+COPY config/wm/wofi-toggle.sh /etc/xdg/labwc/wofi-toggle.sh
 COPY config/vinegar/config.toml /etc/vinegar-default-config.toml
-RUN chmod +x /etc/xdg/labwc/autostart
+RUN chmod +x /etc/xdg/labwc/autostart /etc/xdg/labwc/wofi-toggle.sh
 
 # wofi's "drun" mode (the app launcher waybar's menu button triggers) lists installed
 # .desktop entries — foot doesn't ship one by default, add a minimal one so the terminal
