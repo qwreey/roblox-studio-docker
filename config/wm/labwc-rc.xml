@@ -1,12 +1,27 @@
 <?xml version="1.0"?>
 <!-- Minimal labwc config for headless Docker use (WLR_BACKENDS=headless, no seatd/logind).
      Floating/stacking WM with decorated windows + a right-click app menu (menu.xml) —
-     see CLAUDE.md for why this replaced sway. -->
+     see CLAUDE.md for why this replaced sway.
+
+     KEEP THE <default /> ELEMENTS.  labwc loads its built-in keybind/mousebind tables
+     only when this file declares *none* of its own in that category — a single
+     <mousebind> anywhere replaces the entire default mouse table rather than adding to
+     it.  This file used to carry one Root right-click mousebind and nothing else, which
+     silently removed every titlebar/border binding: windows could not be dragged by
+     their titlebar, the titlebar's close/maximize buttons did nothing, and border
+     resizing was dead (the right-click menu kept working, which is why it read as "some
+     windows are broken" rather than "the mouse config is gone").  <default /> loads the
+     built-ins explicitly so everything below is additive.  Same trap applies to
+     <keyboard> — without it A-F4 (close), A-Space (window menu) and W-Left/Right/Up/Down
+     (snap/maximize) are all gone. -->
 <labwc_config>
   <core>
     <gap>0</gap>
   </core>
   <keyboard>
+    <default />
+    <!-- Additions to labwc's defaults (A-Tab / A-S-Tab window cycling, A-F4 close,
+         A-Space window menu, W-arrows snap/maximize all come from <default /> above). -->
     <keybind key="W-Return">
       <action name="Execute" command="foot"/>
     </keybind>
@@ -16,15 +31,11 @@
     <keybind key="W-f">
       <action name="ToggleMaximize"/>
     </keybind>
-    <keybind key="A-Tab">
-      <action name="NextWindow"/>
-    </keybind>
   </keyboard>
   <mouse>
-    <context name="Root">
-      <mousebind button="Right" action="Press" direction="Down">
-        <action name="ShowMenu" menu="root-menu"/>
-      </mousebind>
-    </context>
+    <default />
+    <!-- No custom mousebinds needed: labwc's defaults already bind right-click on the
+         desktop to root-menu (menu.xml), titlebar drag to Move, border/corner drag to
+         Resize, titlebar double-click to ToggleMaximize and the titlebar buttons. -->
   </mouse>
 </labwc_config>

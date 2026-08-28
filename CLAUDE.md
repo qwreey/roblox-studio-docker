@@ -272,6 +272,60 @@ taskbar:
   also gets normal start-menu behavior for free: a second click closes the menu.
   Verified in a live container — five clicks alternate 1/0/1/0/1, never 2.
 
+### Titlebars were dead: one `<mousebind>` in `rc.xml` wiped labwc's whole default mouse table — fixed 2026-08-29
+
+Reported as "탑바가 안 잡히고 X가 안 눌린다": windows could not be dragged by their
+titlebar, the titlebar's close/minimize/maximize buttons did nothing, double-click-to-
+maximize did nothing, and border/corner resizing was dead — on *every* window, since the
+first day labwc landed. The right-click desktop menu kept working the whole time, which
+is why this read as "some windows are broken" rather than "the mouse config is gone."
+
+**Root cause**: labwc loads its built-in keybind/mousebind tables **only when `rc.xml`
+declares none of its own in that category** — bindings in the config *replace* the
+defaults, they do not add to them. `config/wm/labwc-rc.xml` carried exactly one
+mousebind (`Root` + Right press → `ShowMenu root-menu`) and nothing else, so labwc kept
+that single binding and dropped every default `Titlebar`/`TitleBar`/`Close`/`Iconify`/
+`Maximize`/`Top`/`Bottom`/`Left`/`Right`/`*Corner` binding — i.e. all window management
+that happens with the mouse. Same trap on the keyboard side: the four `<keybind>`s in
+that file cost the defaults `A-F4` (close), `A-Space` (window menu), `A-S-Tab` and
+`W-Left/Right/Up/Down` (snap/maximize). labwc ships **no** `/usr/share/labwc/rc.xml` to
+compare against (the defaults are compiled in, `load_default_{key,mouse}_bindings()`),
+and it logs nothing when it drops them, so there is no artifact anywhere pointing at
+this — the config just looks like a small, reasonable file.
+
+**Fix**: `<default />` as the first child of both `<keyboard>` and `<mouse>` in
+`config/wm/labwc-rc.xml`. That loads the built-ins explicitly, after which everything
+else in the file is additive. The custom `Root` right-click mousebind was then dropped
+entirely — labwc's own defaults already bind desktop right-click to `root-menu`
+(`menu.xml`), so it was redundant *and* destructive. **Do not remove those two
+`<default />` lines**, and be aware that adding any future custom mousebind is only safe
+because they are there.
+
+**Verified end to end** against a live container driven over VNC with a raw RFB client
+(pointer/key events straight into wayvnc, `grim` for verification), first with the config
+bind-mounted for iteration, then re-run against a real `docker compose build` of the
+image: titlebar drag, titlebar double-click maximize, close/minimize/maximize buttons,
+left-border and corner resize, restore-from-taskbar, root right-click menu, titlebar
+right-click window menu, `A-Space`, `A-F4`, `W-Return`, `W-Left` snap — all confirmed
+working after, all confirmed dead (except the root menu) before. That RFB-client approach
+is worth reaching for again: `grim` alone can only show you that nothing moved, it can't
+tell you whether the click was delivered.
+
+**Found in the same pass — waybar's window list only showed the focused window's title.**
+Every other entry rendered as a blank button. Not a waybar config bug: `format` really was
+`"{icon} {title}"` and the label was present (the buttons were full-width), but GTK's own
+button styling beats the `color` inherited from `window#waybar` and dims an unfocused
+button's label to nearly its own background. Fixed in `config/wm/waybar-style.css` with
+explicit `#taskbar button label` / `#taskbar button.active label` colors (plus a brighter
+`.active` background, since the old `#45475a`-vs-`#313244` pair was nearly
+indistinguishable once both labels were legible).
+
+**Applying this to a live deployment**: both files are `COPY`ed into the image, so a
+`docker compose build` + container **recreate** is required — `docker restart` alone keeps
+the old image's `/etc/xdg/labwc/*`. (For a quick check without a rebuild, bind-mount
+`config/wm/labwc-rc.xml` over `/etc/xdg/labwc/rc.xml` and `pkill -HUP -x labwc` — labwc
+re-reads its config on SIGHUP.)
+
 ## Crash-loop bug: stale Wayland socket survives `docker restart` — fixed 2026-08-12
 
 If the container ever gets into a tight restart loop with logs like `labwc is up on

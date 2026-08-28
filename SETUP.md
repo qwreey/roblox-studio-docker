@@ -139,16 +139,20 @@ scary "host key changed" warning every time the container comes back up.
   (opens a searchable app launcher — every installed app, including Terminal/Roblox
   Studio/Chromium), a live window list in the center (click an entry to focus/switch to
   it), and a clock on the right. Right-clicking the desktop background also opens a
-  simpler menu with just Terminal/Roblox Studio/Chromium. `Mod4` (Super/Windows key) +
-  `Return` opens a terminal (`foot`) directly. Double-click a titlebar (or `Mod4+F`) to
-  maximize/unmaximize a window.
+  simpler menu with just Terminal/Roblox Studio/Chromium, and right-clicking a window's
+  titlebar opens that window's own menu (Minimize / Maximize / Fullscreen / Always on Top
+  / Close). Handy keys: `Mod4` (Super/Windows key) + `Return` opens a terminal (`foot`),
+  `Alt+F4` or `Mod4+Q` closes a window, `Alt+Space` opens the window menu, `Alt+Tab`
+  cycles windows, `Mod4+Left/Right` snaps a window to half the screen. Double-click a
+  titlebar (or `Mod4+F`, or `Mod4+Up`) to maximize/unmaximize.
 - **In the app launcher specifically, single-click only selects an item — double-click
   (or select + Enter) actually launches it.** Easy to miss the first time.
-- Mouse and keyboard both work through the VNC connection normally. (During development,
-  scripted/synthetic VNC input from a hand-rolled test client had a reproducible issue
-  where certain buttons wouldn't register clicks — that was specific to the test tooling,
-  not a real limitation; a real VNC client's mouse and keyboard both work fine, including
-  inside Wine/Roblox Studio windows.)
+- Mouse and keyboard both work through the VNC connection normally, including inside
+  Wine/Roblox Studio windows. (An earlier note here blamed a "scripted VNC input can't
+  click certain buttons" symptom on the test tooling — that was wrong. It was a real
+  `labwc` config bug that broke titlebar dragging and the titlebar buttons for *every*
+  client, real ones included; fixed 2026-08-29, see CLAUDE.md's "Titlebars were dead"
+  section.)
 - **Resizing the client window resizes the remote desktop to match** (the RFB
   `SetDesktopSize` extension — TigerVNC and most modern clients support requesting this,
   and wayvnc's headless-Wayland backend can resize its virtual output live to fulfill it).

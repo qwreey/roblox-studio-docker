@@ -27,7 +27,20 @@ window#waybar {
 }
 
 #taskbar button.active {
-  background: #45475a;
+  background: #585b70;
+}
+
+/* The window-list titles need an explicit colour: GTK's own button styling wins over
+   the `color` inherited from window#waybar, and dims the label of every *unfocused*
+   entry to nearly the button's own background — the title of the focused window was
+   readable, every other window in the list looked like a blank button. */
+#taskbar button label {
+  color: #cdd6f4;
+}
+
+#taskbar button.active label {
+  color: #ffffff;
+  font-weight: bold;
 }
 
 #clock {
