@@ -328,21 +328,30 @@ section — this was hard-won, don't rediscover it from scratch):
    config.toml` should show `webview = ""` under `[studio]`. If it's missing or reset,
    Studio's login will show a blank/unusable window instead of the working
    "Login via Browser" fallback.
-3. **Process status**: `docker exec roblox-studio supervisorctl status` — every managed
+3. **The `roblox-studio-auth:` deeplink handler**, if the browser login gets as far as
+   Chromium and then the "Open Roblox Studio" button does nothing:
+   `docker exec roblox-studio gio mime x-scheme-handler/roblox-studio-auth` must answer
+   `org.vinegarhq.Vinegar.desktop`. If it says "No default applications", the image's
+   `update-desktop-database` step has regressed (see `CLAUDE.md`'s Milestone 3 item 6) —
+   `docker exec roblox-studio update-desktop-database /usr/share/applications` fixes a
+   running container on the spot, a rebuild fixes it permanently. Note that
+   `xdg-mime query default` is **not** a valid check here: it answers correctly even
+   while this is broken.
+4. **Process status**: `docker exec roblox-studio supervisorctl status` — every managed
    process (`dbus`, `labwc`, `wayvnc`, `mcp-bridge`, `critical-watchdog`) should show
    `RUNNING`. Per-program logs live at `/var/log/<program>/stdout.log` and `stderr.log`
    inside the container (e.g. `docker exec roblox-studio tail -f /var/log/labwc/stderr.log`)
    — see CLAUDE.md's "Process supervision: supervisord" section. `docker compose logs`
    still shows supervisord's own top-level log line plus everything written before the
    handoff to it.
-4. **Container stuck in a fast restart loop** (`docker ps` shows `Restarting (1)` every
+5. **Container stuck in a fast restart loop** (`docker ps` shows `Restarting (1)` every
    couple seconds): see `CLAUDE.md`'s "Crash-loop bug: stale Wayland socket survives
    `docker restart`" section — a known, fixed class of bug (stale `/tmp/xdg-runtime`
    state surviving a restart). If it's back, that fix likely got reverted. Also possible:
    `critical-watchdog` shutting the container down because `dbus`/`labwc`/`wayvnc`
    actually failed to start — check `supervisorctl status` and that program's own
    stderr.log for the real underlying error before assuming it's the stale-socket bug.
-5. **MCP bridge not responding**: `docker exec roblox-studio tail -50
+6. **MCP bridge not responding**: `docker exec roblox-studio tail -50
    /var/log/mcp-bridge/stdout.log`. If it's idling instead of running, confirm `MCP_TOKEN`
    is actually set in `.env` (the bridge idles without it, by design) and that the
    container was recreated (not just left running from before `MCP_TOKEN` was added) —

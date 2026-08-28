@@ -87,7 +87,7 @@ Docker Compose, self-contained, is the whole point.
 
 Roblox Studio launches, renders, and a real account can log in end-to-end (verified:
 Studio's dashboard loaded with "Welcome, &lt;username&gt;", real thumbnails, working UI).
-Getting there required chasing down five independent, stacked bugs — all now fixed and
+Getting there required chasing down six independent, stacked bugs — all now fixed and
 baked into the Dockerfile/entrypoint.sh/docker-compose.yml. Record kept here because none
 of these are obvious and every one of them will silently break again if undone:
 
@@ -145,11 +145,39 @@ of these are obvious and every one of them will silently break again if undone:
    most CSS/JS with `net::ERR_INSUFFICIENT_RESOURCES` — the exact same URLs loaded fine
    from a normal host browser, isolating it to a container resource limit, not a network/
    CDN issue. Fixed with `shm_size: '2gb'` in `docker-compose.yml`.
+6. **`update-desktop-database` is never run for Vinegar's own `.desktop` file**, which
+   breaks the *second half* of the browser login — found on the live deployment
+   2026-08-28, long after the rest of this list (the first five were all found in one
+   sitting on 2026-08-11; this one only surfaces on a *first* login, and until then every
+   restart came back up on an already-persisted token). The handoff back from the browser
+   is a `roblox-studio-auth:` deeplink claimed by `org.vinegarhq.Vinegar.desktop`, which
+   Vinegar's `make install` installs but does not register: `update-desktop-database` is
+   in Vinegar's separate `make host` target (a distro package's post-install hook territory
+   — an image build has to call it itself). So `mimeinfo.cache` carried only the pacman-
+   installed apps, GIO could not resolve the scheme, and the flow died exactly at the
+   "Open Roblox Studio" click: Chromium opens, login succeeds, the button does nothing.
+   The **only** trace anywhere was a single line in Vinegar's own log
+   (`/root/.cache/vinegar/logs/<ts>.log`, mounted at `./data/vinegar-cache/logs/`):
+
+   ```
+   gio: roblox-studio-auth:/?code=...: The specified location is not supported
+   ```
+
+   (immediately preceded by Chromium's `dbus/xdg/request.cc … Request ended (non-user
+   cancelled)` — Chromium tries the XDG portal first, then falls back to `xdg-open`, which
+   under `XDG_CURRENT_DESKTOP=GNOME` — required by item 3 above — delegates to `gio open`.)
+   Fixed in the `Dockerfile` with a `update-desktop-database` + explicit `xdg-mime default`
+   step placed after every `.desktop` file, guarded by a `grep` on `mimeinfo.cache` so a
+   future Vinegar upgrade that renames the association fails the build instead of shipping
+   a silently broken login. **Do not diagnose this with `xdg-mime query default` — it reads
+   the `.desktop` files directly and answers `org.vinegarhq.Vinegar.desktop` even while
+   completely broken.** `gio mime x-scheme-handler/roblox-studio-auth` is the check that
+   reflects reality ("No default applications for ..." when broken).
 
 None of these are specific to *this* one login attempt — they're structural, and the fix
 for each is now in the actual image/compose config (not something done ad hoc in a shell
 that will be lost on rebuild). If Studio's login breaks again after a rebuild, suspect one
-of these five having been silently reverted before re-investigating from scratch.
+of these six having been silently reverted before re-investigating from scratch.
 
 **Still-unverified, expected-broken item**: edit-mode camera rotation (the Wayland/
 XWayland pointer-lock limitation accepted back in the Milestone 1/2 pivot). Not yet

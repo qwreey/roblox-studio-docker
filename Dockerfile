@@ -132,6 +132,39 @@ RUN chmod +x /etc/xdg/labwc/autostart
 RUN printf '[Desktop Entry]\nVersion=1.0\nName=Terminal\nExec=foot\nTerminal=false\nIcon=utilities-terminal\nType=Application\nCategories=System;TerminalEmulator;\n' \
       > /usr/share/applications/foot.desktop
 
+# Rebuild the desktop-file MIME association cache — this must come *after* every
+# .desktop file above, Vinegar's included. Vinegar's `make install` installs its
+# org.vinegarhq.Vinegar.desktop (which is what claims
+# `x-scheme-handler/roblox-studio-auth`, the deeplink Roblox's web login hands back
+# to Studio) but deliberately does *not* run update-desktop-database — that lives in
+# its separate `make host` target, which a distro package's post-install hook would
+# normally run and an image build has to do itself. Without this, mimeinfo.cache
+# still reflects only the pacman-installed apps and GIO cannot resolve the scheme at
+# all, which breaks the *second half* of the "Login via Browser" flow while leaving
+# the first half working perfectly: Chromium opens the Roblox login page, the user
+# authenticates, clicks "Open Roblox Studio" — and nothing happens. Observed on the
+# live deployment 2026-08-28, with the only trace being one line in Vinegar's own log:
+#
+#   gio: roblox-studio-auth:/?code=...: The specified location is not supported
+#
+# `xdg-mime query default x-scheme-handler/roblox-studio-auth` answers
+# `org.vinegarhq.Vinegar.desktop` even while broken (it reads the .desktop files
+# directly), so it is *not* a usable check for this — `gio mime
+# x-scheme-handler/roblox-studio-auth` is, and it's the lookup that actually runs:
+# with XDG_CURRENT_DESKTOP=GNOME (required, see CLAUDE.md's Milestone 3 item 3)
+# xdg-open delegates to `gio open`.
+#
+# The explicit xdg-mime default is belt-and-braces on top: update-desktop-database
+# alone is verified sufficient, but this pins Vinegar as the handler in
+# /root/.config/mimeapps.list rather than relying on it being the only registered
+# claimant forever. The test guard fails the build loudly if a Vinegar upgrade ever
+# renames or drops the association instead of silently shipping a broken login.
+RUN update-desktop-database /usr/share/applications \
+    && xdg-mime default org.vinegarhq.Vinegar.desktop \
+         x-scheme-handler/roblox-studio-auth x-scheme-handler/roblox-studio \
+    && grep -q '^x-scheme-handler/roblox-studio-auth=org.vinegarhq.Vinegar.desktop' \
+         /usr/share/applications/mimeinfo.cache
+
 COPY config/mcp/Caddyfile /etc/mcp-bridge/Caddyfile
 COPY config/mcp/mcp-bridge.sh /usr/local/bin/mcp-bridge.sh
 COPY config/mcp/studio-mcp-stdio.sh /usr/local/bin/studio-mcp-stdio.sh
