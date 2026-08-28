@@ -94,6 +94,20 @@ services:
   # 여전히 capability가 0개이고, 라우트를 심는 권한은 컨테이너 바깥에만 있다. 그 분리가
   # 이 구조의 목적 전부다.
 
+  # MCP 브리지를 실제로 쓰는 쪽은 code-docker 안의 에이전트다 - 그런데 code-docker
+  # 서비스 자신의 environment에는 MCP_TOKEN이 없어서(당연히 - code-docker는 이 사이드
+  # 프로젝트를 모른다), 컨테이너 안에서 `$MCP_TOKEN`이 빈 문자열이었다. 그 상태로
+  # `claude mcp add --header "Authorization: Bearer $MCP_TOKEN"` 을 하면 빈 토큰을 보내고
+  # caddy가 401로 막는데, 원인이 화면에 안 드러난다(헤더는 붙어있으니까). 소비자에게
+  # 값을 넘기는 건 이 오버레이의 일이므로 여기서 병합해준다 - 이러면 code-docker 안에서
+  # $MCP_TOKEN이 그대로 쓰이고, 문서의 명령을 복붙해도 동작한다.
+  #
+  # 토큰이 code-docker 안에서 읽힌다는 점 자체는 새 노출이 아니다 - 애초에 이 토큰을
+  # 쓰라고 주는 컨테이너고, `claude mcp add`가 저장하는 ~/.claude.json에도 남는다.
+  code-docker:
+    environment:
+      MCP_TOKEN: "${MCP_TOKEN:-}"
+
   # code-docker 쪽에 이미 정의된 서비스에 필드만 추가 병합 (include 병합은 서비스
   # 이름 기준으로 동작 - "이 파일에서 정의한 서비스만" 이라는 제약 없음, code-docker
   # 쪽에서 실측 검증됨). router가 roblox-studio-vnc에도 붙어야 forwards:로
