@@ -272,6 +272,13 @@ docker exec -e MCP_TOKEN="${MCP_TOKEN:?set in .env}" roblox-studio mcp-bridge.sh
 The bridge exposes MCP over **Streamable HTTP** at `http://<host>:${MCP_PORT:-8787}/mcp`,
 gated by `Authorization: Bearer <MCP_TOKEN>`.
 
+> **Running alongside code-docker?** The address is `http://studio:8787/mcp` instead —
+> `MCP_PORT` is not host-published in that mode (see the security notes below), and the
+> client is code-docker's own agent container reaching the bridge over
+> `code-docker-internal`. code-docker's own
+> [`docs/tips/roblox-studio.md`](https://github.com/qwreey/code-docker/blob/HEAD/docs/tips/roblox-studio.md)
+> documents that side end to end, including where `MCP_TOKEN` is set from there.
+
 - **Claude Code, native remote-MCP support** (recent versions speak Streamable HTTP
   directly — no `mcp-remote` needed). Verified working end-to-end against this bridge:
   ```sh
