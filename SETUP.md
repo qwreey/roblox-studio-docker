@@ -277,7 +277,9 @@ gated by `Authorization: Bearer <MCP_TOKEN>`.
 > client is code-docker's own agent container reaching the bridge over
 > `code-docker-internal`. code-docker's own
 > [`docs/tips/roblox-studio.md`](https://github.com/qwreey/code-docker/blob/HEAD/docs/tips/roblox-studio.md)
-> documents that side end to end, including where `MCP_TOKEN` is set from there.
+> documents that side end to end. `MCP_TOKEN` is generated for you there (code-docker's
+> `ootb.sh`/`migrate.sh` create it in code-docker's own `.env` and print the value) —
+> the step that actually gates anything is the in-Studio toggle in §1 below.
 
 - **Claude Code, native remote-MCP support** (recent versions speak Streamable HTTP
   directly — no `mcp-remote` needed). Verified working end-to-end against this bridge:
