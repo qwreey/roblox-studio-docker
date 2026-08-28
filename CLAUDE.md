@@ -546,7 +546,17 @@ Worth knowing: that commit's own message describes fixing the
 exactly [WineHQ bug 59640](https://bugs.winehq.org/show_bug.cgi?id=59640), *"Roblox
 Studio's 3D-viewport turns blank or flickers (VK_SUBOPTIMAL_KHR)"*. So this is a fix for
 Studio's intermittent blank viewport that turned it into a permanent one. Expect the real
-upstream fix to land in that same area, and re-test the pin when it does.
+upstream fix to land in that same area.
+
+**Reported upstream as [WineHQ bug 60248](https://bugs.winehq.org/show_bug.cgi?id=60248)**
+(*"Roblox Studio 0.736: the editor never appears after opening a place"*), with the
+bisect, before/after screenshots and the engine/terminal logs from both builds attached.
+**Watch that bug rather than blind-bumping `KOMBUCHA_VERSION`** — the pin exists only
+until upstream fixes this, and the Dockerfile's `wine --version` test is the tripwire that
+stops a bump off 11.15 from silently reintroducing the bug. When a fix lands, test it
+before dropping the pin: `~/wine-bisect/` on the dev machine is a warm Wine build tree
+(clone + ccache + both bisect builds) where `build.sh <commit> <name>` produces a testable
+install in a few minutes.
 
 **Vinegar facts learned while bisecting** (verified against `vinegar` 1.9.4's source, not
 guessed):
