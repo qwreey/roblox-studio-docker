@@ -133,13 +133,21 @@ container actually boots and it's clear what needs to be overridable.
 - Built Vinegar from source (no prebuilt binary release exists — matched the AUR
   `vinegar` package's own PKGBUILD build steps). Manages its own Wine build ("Kombucha")
   automatically at first run — no system `wine` package needed.
-- In practice, Wine ended up using its **native `winewayland.drv`** (not XWayland as
-  originally planned here) — Vinegar/Wine auto-detected `WAYLAND_DISPLAY` and preferred
-  it; `xorg-xwayland` is still installed but wasn't what actually got used. Doesn't change
-  the accepted camera-rotation tradeoff (research already established both paths have the
-  same pointer-lock gap).
-- Renderer: `DXVK` (Vinegar's default). Real Vulkan acceleration confirmed via Wine's own
-  diagnostic log line (`winediag:wined3d_dll_init Using the Vulkan renderer`).
+- Which Wine display driver gets used is **not fixed and was mis-stated here** until
+  2026-08-28. This bullet used to claim `winewayland.drv` always won; in practice both are
+  reachable and Wine's own preference order (`x11,wayland`) means `winex11.drv` over
+  rootless XWayland wins whenever `DISPLAY` is set, which it is under labwc. Check, don't
+  assume: `grep -oE '(winex11|winewayland)[^ ]*' /proc/<studio-pid>/maps`, or look for Wine
+  windows with `DISPLAY=:0 xwininfo -root -tree` (none listed ⇒ it's on Wayland). Either
+  way the accepted camera-rotation tradeoff is unchanged — research established both paths
+  have the same pointer-lock gap.
+- Renderer: `DXVK` (Vinegar's default). Note `winediag:wined3d_dll_init Using the Vulkan
+  renderer` is **not** evidence of that — it means wined3d was loaded by something, which
+  is the opposite signal. DXVK's own log lines (`D3D11DXGIDevice::QueryInterface`,
+  `DXGI: MakeWindowAssociation`) are the real tell, and `DXVK_HUD=devinfo,fps` in
+  `[studio.env]` names the adapter on screen.
+- **Wine version is pinned** as of 2026-08-28: wine-11.16 renders the 3D viewport blank.
+  See CLAUDE.md's "Wine 11.16 viewport regression" section.
 - **Verify — done**: Studio launches, renders its full UI correctly (splash screen,
   dashboard, real thumbnails), and **a real account successfully logged in** end-to-end
   via the "Login via Browser" flow. See CLAUDE.md's "Milestone 3" section for the five

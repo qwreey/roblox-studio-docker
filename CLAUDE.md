@@ -485,6 +485,75 @@ resizes (`wlr-randr` confirmed). What was missing was purely on the *viewer* sid
 code-docker's router hardcoded `resize=scale` in the noVNC URL; that's now a per-target
 setting there (see its `router/docs/vnc.md`).
 
+## Wine 11.16 viewport regression — Kombucha pinned to 11.15, 2026-08-28
+
+Roblox Studio's **3D viewport renders nothing** on Kombucha `stable+20260824153321`
+(**wine-11.16**). Everything else about Studio is fine: it launches, logs in, the ribbon
+and menus draw, a place opens (title bar, `RobloxIDEDoc::activate`, `SceneManager:
+resizing main targets to 812x675` all normal) — only the editor's document area comes up
+blank. Kombucha `stable+20260809183117` (**wine-11.15**) renders correctly. Pinned via the
+Dockerfile's `KOMBUCHA_VERSION` block (installs to `/opt/kombucha-pinned`) plus `wineroot`
+in `config/vinegar/config.toml`.
+
+**What the symptom actually is** — stating this correctly took most of the debugging time,
+and every wrong framing cost hours. It is *not* a GPU/driver failure, *not* the Start Page
+covering the viewport, and *not* window placement. With `DXVK_HUD=devinfo,fps` in
+`[studio.env]` you can see **two** HUDs — one on the ribbon's swapchain, one at the
+document area's top-left — and that second one runs at 60+ fps over an otherwise empty
+area. So the viewport's own swapchain *is* being presented, at full framerate, with DXVK
+drawing its opaque HUD onto it; what fails is the composite of the engine's `main targets`
+render target into that backbuffer, which comes out empty. Diagnose this class of bug with
+the HUD, not with screenshots of "nothing there" — a viewport that was never created and
+one that presents empty frames look identical otherwise.
+
+**Eliminated before landing on Wine** (keep this list so none of it gets re-tested):
+
+| Variable | Result |
+|---|---|
+| Studio 0.734 / 0.735 / 0.736 (pinned via `forced_version`) | all broken |
+| DXVK vs Roblox's native Vulkan renderer (`renderer = "Vulkan"`) | both broken |
+| `winex11.drv` vs `winewayland.drv` | both broken |
+| Wine virtual-desktop on/off | both broken |
+| Output resolution, 576x888 → 1920x1080 | all broken |
+| Image packages: Mesa 26.1.6 + labwc 0.20.1 vs Mesa 26.2.1 + labwc 0.20.2 | both broken |
+| Repo commits (a 2026-08-12 build of this image reproduces) | broken |
+| Server-side FFlag bucket | identical on both sides of the working/broken flip |
+| **Kombucha wine-11.15 vs wine-11.16** | **11.15 works, 11.16 broken** |
+
+The flip that settled it: one known-good `vinegar-data` directory, one container, one
+image, one Studio build, one FFlag bucket — only `wineroot` changed between runs, and it
+reproduced in both directions. A 11.15 pin also repairs a prefix that 11.16 already
+created, so recovering an existing deployment needs no prefix wipe and no re-login.
+
+**Vinegar facts learned while bisecting** (verified against `vinegar` 1.9.4's source, not
+guessed):
+
+- Roblox's own engine log is **not** in the Wine prefix. Vinegar redirects Windows' "Local
+  AppData" out of it (`internal/dirs/dirs.go`, `cmd/vinegar/app_wine.go`), so the logs live
+  at `~/.local/share/vinegar/appdata/Roblox/logs/*.log` — that's where `[FLog::Graphics]`,
+  `[FLog::D3D11SwapChain]` and the FFlag bucket's `settingsUrl` are.
+- Vinegar forces `DXVK_LOG_LEVEL=warn` unless `debug = true` is set at the *top level* of
+  `config.toml`, which is why DXVK never names the adapter in a default run.
+- `forced_version = "version-<guid>"` skips deployment lookup and installs that GUID
+  directly. Past GUIDs are no longer obtainable from `DeployHistory.txt` (it serves
+  `version-hidden`), but Vinegar's own logs record them — `grep 'Using Deployment'
+  ~/.cache/vinegar/logs/*.log` on an old data directory recovers them.
+- `channel = "..."` did **not** reliably repoint the FFlag bucket in testing; the registry
+  write it is supposed to do (`HKCU\Software\ROBLOX Corporation\Environments\RobloxStudio\
+  Channel`) never landed. Use `[studio.fflags]` if a specific flag needs overriding.
+- Vinegar deletes Kombucha builds it did not choose out of
+  `~/.local/share/vinegar/kombucha*`, so a pinned build has to live outside that directory
+  — hence `/opt/kombucha-pinned`.
+- Opening Vinegar's Manager (settings) window rewrites `config.toml` from its in-memory
+  state, dropping comments and hand-added keys. Don't touch it while a pin is in place.
+
+**Applying this to an already-deployed instance**: `entrypoint.sh` seeds `config.toml`
+only when it doesn't already exist, so a rebuild alone will *not* add `wineroot` to a live
+deployment. Add the line by hand to `data/vinegar-config/config.toml` and restart Studio.
+
+Worth reporting upstream to `vinegarhq/kombucha` (or Wine directly) — the repro is narrow
+enough to be actionable now: wine-11.15 vs wine-11.16, same everything else.
+
 ## DNS behind router: `dns-local` — added 2026-08-27
 
 Attached to code-docker (`roblox-studio-code-docker.yml`) this container sits on

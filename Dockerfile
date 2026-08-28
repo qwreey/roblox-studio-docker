@@ -50,7 +50,7 @@ RUN pacman -Syu --noconfirm --needed \
 # Vinegar (Roblox Studio bootstrapper) — built from source, matching the AUR `vinegar`
 # package's own PKGBUILD build steps (no prebuilt binary release exists). Manages its
 # own Wine build ("Kombucha") automatically at first run — no system `wine` package
-# needed.
+# needed, though that auto-download is overridden by the pin below.
 ARG VINEGAR_VERSION=1.9.4
 RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGAR_VERSION}.tar.gz" -o /tmp/vinegar.tar.gz \
     && tar xzf /tmp/vinegar.tar.gz -C /tmp \
@@ -61,6 +61,33 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
     && make PREFIX=/usr install \
     && cd / \
     && rm -rf "/tmp/vinegar-${VINEGAR_VERSION}" /tmp/vinegar.tar.gz /root/go /root/.cache
+
+# Kombucha (Vinegar's own Wine build) — PINNED here rather than left to Vinegar's
+# auto-download. See CLAUDE.md's "Wine 11.16 viewport regression" section for the full
+# bisect; short version: on Kombucha `stable+20260824153321` (**wine-11.16**) Roblox
+# Studio's 3D viewport renders nothing. The swapchain presents at full framerate (DXVK's
+# own HUD draws onto it fine) but the composite of the engine's `main targets` into the
+# backbuffer comes out empty, so the editor's document area is blank while every other
+# part of Studio draws correctly. `stable+20260809183117` (**wine-11.15**) is fine.
+#
+# Installed under /opt, NOT into Vinegar's own data directory: Vinegar manages
+# `~/.local/share/vinegar/kombucha*` itself and deletes a build there that isn't the one
+# it wants — observed 2026-08-28, pointing `wineroot` at a sibling directory made it
+# remove the pinned build on the very next launch. `config/vinegar/config.toml` points
+# `wineroot` here. The `wine --version` test is what makes a KOMBUCHA_VERSION bump that
+# moves off 11.15 fail the build loudly instead of silently reintroducing the bug.
+# KOMBUCHA_VERSION is URL-encoded (%2B for the `+` in the real tag name,
+# `stable+20260809183117`) because it appears in both the release tag and the asset
+# filename, and GitHub serves neither unencoded.
+ARG KOMBUCHA_VERSION=stable%2B20260809183117
+ARG KOMBUCHA_WINE_VERSION=wine-11.15
+RUN curl -fsSL "https://github.com/vinegarhq/kombucha/releases/download/${KOMBUCHA_VERSION}/kombucha-${KOMBUCHA_VERSION}.tar.xz" -o /tmp/kombucha.tar.xz \
+    && mkdir -p /tmp/kombucha \
+    && tar xJf /tmp/kombucha.tar.xz -C /tmp/kombucha \
+    && mv "$(dirname "$(dirname "$(find /tmp/kombucha -type f -name wine -path '*/bin/*' | head -1)")")" /opt/kombucha-pinned \
+    && rm -rf /tmp/kombucha /tmp/kombucha.tar.xz \
+    && test "$(WINEPREFIX=/tmp/wine-version-probe /opt/kombucha-pinned/bin/wine --version)" = "${KOMBUCHA_WINE_VERSION}" \
+    && rm -rf /tmp/wine-version-probe
 
 # noVNC + websockify — see CLAUDE.md's "VNC embedding" section. wayvnc itself stays raw
 # RFB-only on VNC_PORT (unchanged, still the right choice for native clients like
