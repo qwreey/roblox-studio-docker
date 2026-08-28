@@ -20,7 +20,41 @@ set -euo pipefail
 # version bump without a hardcoded path — without going through cmd.exe at all.
 
 export WINEPREFIX="/root/.local/share/vinegar/prefixes/studio"
-export PATH="/root/.local/share/vinegar/kombucha/bin:${PATH}"
+
+# Studio를 띄우는 데 쓰이는 것과 **같은** wine을 써야 한다. 그 답은 Vinegar 자신의
+# config.toml에 있다: `wineroot`가 설정돼 있으면 Vinegar는 그 경로의 wine을 쓰고,
+# 없으면 자기가 직접 받아 관리하는 ~/.local/share/vinegar/kombucha를 쓴다.
+#
+# 예전에는 후자를 PATH에 하드코딩했는데, wine 11.16 뷰포트 회귀 때문에 wine 11.15를
+# /opt/kombucha-pinned에 굽고 config.toml에 wineroot로 핀을 박자 이 스크립트만 옛
+# 경로를 보게 됐다 - `exec: wine: not found`로 자식이 code=127로 죽고, 브리지 자체는
+# 멀쩡히 살아있어서 원격에서는 "인증은 통과하는데 응답이 없는" 타임아웃으로만 보였다.
+# 그래서 경로를 또 하나 하드코딩하는 대신 진짜 출처를 읽는다 - 나중에 핀을 풀어도
+# 여기를 다시 고칠 일이 없다.
+VINEGAR_CONFIG="${HOME:-/root}/.config/vinegar/config.toml"
+WINE_BIN=""
+
+if [[ -f "${VINEGAR_CONFIG}" ]]; then
+  WINEROOT="$(sed -n 's/^[[:space:]]*wineroot[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "${VINEGAR_CONFIG}" | tail -n1)"
+  if [[ -n "${WINEROOT}" && -x "${WINEROOT}/bin/wine" ]]; then
+    WINE_BIN="${WINEROOT}/bin/wine"
+  fi
+fi
+
+if [[ -z "${WINE_BIN}" && -x /root/.local/share/vinegar/kombucha/bin/wine ]]; then
+  WINE_BIN="/root/.local/share/vinegar/kombucha/bin/wine"
+fi
+
+if [[ -z "${WINE_BIN}" ]]; then
+  WINE_BIN="$(command -v wine || true)"
+fi
+
+if [[ -z "${WINE_BIN}" ]]; then
+  echo "[studio-mcp-stdio] no wine binary found - looked at wineroot in ${VINEGAR_CONFIG}, then /root/.local/share/vinegar/kombucha/bin/wine, then \$PATH. Has Vinegar downloaded (or has the Dockerfile pinned) a Wine build yet?" >&2
+  exit 1
+fi
+
+export PATH="$(dirname "${WINE_BIN}"):${PATH}"
 
 STUDIO_MCP_EXE="$(ls -td /root/.local/share/vinegar/versions/*/StudioMCP.exe 2>/dev/null | head -n1)"
 if [[ -z "${STUDIO_MCP_EXE}" ]]; then
@@ -28,4 +62,4 @@ if [[ -z "${STUDIO_MCP_EXE}" ]]; then
   exit 1
 fi
 
-exec wine "${STUDIO_MCP_EXE}"
+exec "${WINE_BIN}" "${STUDIO_MCP_EXE}"

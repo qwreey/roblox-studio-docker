@@ -504,7 +504,12 @@ and menus draw, a place opens (title bar, `RobloxIDEDoc::activate`, `SceneManage
 resizing main targets to 812x675` all normal) — only the editor's document area comes up
 blank. Kombucha `stable+20260809183117` (**wine-11.15**) renders correctly. Pinned via the
 Dockerfile's `KOMBUCHA_VERSION` block (installs to `/opt/kombucha-pinned`) plus `wineroot`
-in `config/vinegar/config.toml`.
+in `config/vinegar/config.toml`. **Anything else in this image that launches Wine has to
+read that same `wineroot`, not a hardcoded path** — `config/mcp/studio-mcp-stdio.sh` had
+`~/.local/share/vinegar/kombucha/bin` baked into `PATH` and silently stopped working the
+moment this pin landed (`exec: wine: not found`, child exits 127, bridge stays up, remote
+clients see only a timeout). It parses `wineroot` out of the live `config.toml` now, so
+un-pinning later needs no second edit.
 
 **What the symptom actually is** — stating this correctly took most of the debugging time,
 and every wrong framing cost hours. It is *not* a GPU/driver failure, *not* the Start Page

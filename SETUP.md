@@ -364,7 +364,13 @@ section — this was hard-won, don't rediscover it from scratch):
    /var/log/mcp-bridge/stdout.log`. If it's idling instead of running, confirm `MCP_TOKEN`
    is actually set in `.env` (the bridge idles without it, by design) and that the
    container was recreated (not just left running from before `MCP_TOKEN` was added) —
-   see "Studio MCP over the network" below.
+   see "Studio MCP over the network" below. If the bridge is `RUNNING` and `/healthz`
+   answers but real MCP requests hang, read the same log for a repeating
+   `[supergateway] Child exited: code=127`: the stdio child failed to start, and the line
+   above it says why (`StudioMCP.exe not found` — the in-Studio toggle was never flipped;
+   `wine: not found` — `studio-mcp-stdio.sh` could not resolve a Wine build, see its own
+   header comment). Both fail this way rather than loudly, because the bridge itself stays
+   up and keeps answering — only the requests that get past auth go nowhere.
 
 ## Where things live (persisted across restarts, in `./data/`, gitignored)
 
