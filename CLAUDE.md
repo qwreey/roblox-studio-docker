@@ -525,6 +525,29 @@ image, one Studio build, one FFlag bucket — only `wineroot` changed between ru
 reproduced in both directions. A 11.15 pin also repairs a prefix that 11.16 already
 created, so recovering an existing deployment needs no prefix wipe and no re-login.
 
+**Bisected to a single upstream commit** (same day, by building upstream Wine 64-bit-only
+— Studio is x86_64-only so no multilib is needed — at two adjacent commits and swapping
+only `wineroot` between them):
+
+```
+2293b0e8ca1dc36f0c89a396309997f65e5759fa  win32u: Keep unused client surfaces around
+                                          and reuse them if possible.        ← BAD
+ec23c07b4514adb5e953dcd230ac061a0c6b5bf5  (parent)                           ← GOOD
+```
+
+`wine-11.15-30-g2293b0e8ca1` breaks it; `wine-11.15-29-gec23c07b451` does not. The commit
+makes `win32u_vkCreateWin32SurfaceKHR` adopt a cached client surface
+(`get_unused_client_surface`) instead of always creating a fresh one
+(`pCreateClientSurface`). Studio's viewport is a child window that recreates its surface
+during startup, so it presumably gets a reused surface that isn't in the state it expects.
+
+Worth knowing: that commit's own message describes fixing the
+"`VK_SUBOPTIMAL_KHR` makes applications recreate their `VkSurfaceKHR`" problem — which is
+exactly [WineHQ bug 59640](https://bugs.winehq.org/show_bug.cgi?id=59640), *"Roblox
+Studio's 3D-viewport turns blank or flickers (VK_SUBOPTIMAL_KHR)"*. So this is a fix for
+Studio's intermittent blank viewport that turned it into a permanent one. Expect the real
+upstream fix to land in that same area, and re-test the pin when it does.
+
 **Vinegar facts learned while bisecting** (verified against `vinegar` 1.9.4's source, not
 guessed):
 
