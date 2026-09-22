@@ -429,14 +429,14 @@ protocol) no matter how the target is allow-listed. See code-docker's own
 (noVNC chosen over KasmVNC/Guacamole/a Selkies rewrite — Selkies stays backlogged, revisit
 only if noVNC's software-encoding CPU cost becomes a real problem in practice) and
 `docs/dev-proxy.md`/`docs/app-routes.md`'s own `ROUTER_EXTRA_ALLOWED_TARGET_HOSTS` entry
-for how a target like `vnc-only:6080` gets past router's own self-SSRF allowlist without a
+for how a target like `roblox-studio-vnc:6080` gets past router's own self-SSRF allowlist without a
 router code change.
 
 **End-to-end verified, 2026-08-19**: real `docker compose build` + a live integrated
 stack (this container + code-docker + router via `EXTRA_INCLUDE`), an actual App Routes
-entry (`vnc-only:6080` → `/app/studio-vnc/`) registered through router-manager's API, and
+entry (`roblox-studio-vnc:6080` → `/app/studio-vnc/`) registered through router-manager's API, and
 a real browser driven through that exact path — confirmed network isolation (code-docker
-container can't even resolve `vnc-only`; router can, gets a real `RFB 003.008` banner),
+container can't even resolve `roblox-studio-vnc`; router can, gets a real `RFB 003.008` banner),
 confirmed the noVNC static UI + all its relative assets resolve correctly under the
 `/app/studio-vnc/` subpath (no path-rewrite issues), and confirmed a full connect with
 live mouse-cursor movement through the tunnel ("Connected (unencrypted) to WayVNC").
@@ -661,7 +661,7 @@ enough to be actionable now: wine-11.15 vs wine-11.16, same everything else.
 
 Attached to code-docker (`roblox-studio-code-docker.yml`) this container sits on
 `internal: true` networks only. Docker's embedded DNS (`127.0.0.11`) still resolves
-same-network names there — `vnc-only`, `router`, `studio` — but has no route to forward
+same-network names there — `roblox-studio-vnc`, `router`, `studio` — but has no route to forward
 anything else, and answers those with an **immediate, definitive SERVFAIL** rather than a
 timeout. Nothing here had ever written a second nameserver, so this container simply had
 no external DNS: measured on the live deployment, 0/15 lookups of
@@ -687,7 +687,7 @@ Three things about that shape are load-bearing and easy to get wrong:
   `.claude/archive/dns-local-servfail-fix-done.md`) and this container would have
   inherited the same half-fix.
 - **Pointing at router alone is not a fix either.** `wayvnc-service.sh` and
-  `novnc-service.sh` resolve `VNC_BIND_ALIAS` (`vnc-only`) with `getent` and **fail
+  `novnc-service.sh` resolve `VNC_BIND_ALIAS` (`roblox-studio-vnc`) with `getent` and **fail
   closed** if it doesn't resolve — deliberately, since a silent `0.0.0.0` fallback would
   defeat the network segmentation. router's dnsmasq doesn't know compose aliases, so both
   upstreams are genuinely required. That is the whole reason a local strict-order

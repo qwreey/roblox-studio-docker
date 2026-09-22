@@ -19,7 +19,7 @@ set -eu
 # router.
 #
 # It cannot simply point at router either: wayvnc-service.sh and
-# novnc-service.sh both resolve VNC_BIND_ALIAS (`vnc-only`) with `getent`
+# novnc-service.sh both resolve VNC_BIND_ALIAS (`roblox-studio-vnc`) with `getent`
 # and *fail closed* if it doesn't resolve, and router's dnsmasq doesn't know
 # compose aliases. Both upstreams are genuinely needed, which is the whole
 # reason the shared script exists rather than a resolv.conf line.

@@ -44,10 +44,12 @@ services:
       DNS_LOCAL_ENABLED: "true"
       # wayvnc가 0.0.0.0 대신 이 별칭이 resolve된 IP에만 바인딩하게 함 (fail-closed -
       # entrypoint.sh 쪽 wayvnc-service.sh 참고). 아래 networks.roblox-studio-vnc.aliases와
-      # 반드시 일치해야 함 - studio 자신의 이름이 아니라 roblox-studio-vnc 위에서만
+      # 반드시 일치해야 함 - studio 자신의 이름이 아니라 roblox-studio-vnc 망 위에서만
       # 존재하는 전용 별칭이어야 한다(그래야 code-docker-internal 쪽 IP로 잘못
-      # resolve될 여지가 없음).
-      VNC_BIND_ALIAS: vnc-only
+      # resolve될 여지가 없음). 망과 같은 이름인 건 code-docker-chrome의 chrome-vnc와
+      # 같은 모양 - 여러 VNC 대상이 한 router에 붙을 때 어느 것인지 이름만으로
+      # 알 수 있게(예전 이름 vnc-only는 대상이 하나뿐이라고 가정한 이름이었다).
+      VNC_BIND_ALIAS: roblox-studio-vnc
     networks:
       # code-docker-internal에 붙이는 것만으로 코드가 뭔가 자동으로 되는 건 없다 -
       # 이 네트워크 위에서 code-docker 쪽 에이전트 컨테이너가 실제로 Studio MCP
@@ -60,7 +62,7 @@ services:
       # networks.roblox-studio-vnc 정의 참고.
       roblox-studio-vnc:
         aliases:
-          - vnc-only
+          - roblox-studio-vnc
     # docker-compose.yml의 ports: (VNC_PORT/VNC_WEB_PORT/MCP_PORT 전부 host 게시)를
     # 통째로 비운다. VNC_PORT/VNC_WEB_PORT는 격리가 목적이라 당연하고(noVNC 웹 UI도
     # wayvnc와 같은 VNC_BIND_ALIAS 대상이라 code-docker-router의 App Routes로만
@@ -112,7 +114,7 @@ services:
   # 이름 기준으로 동작 - "이 파일에서 정의한 서비스만" 이라는 제약 없음, code-docker
   # 쪽에서 실측 검증됨). router가 roblox-studio-vnc에도 붙어야 forwards:로
   # VNC(5900)를 host에 안전하게 중계할 수 있다 - 실제 forward 항목(host_port ->
-  # vnc-only:5900) 추가는 컴포즈 파일이 아니라 router-manager의 Net 관리
+  # roblox-studio-vnc:5900) 추가는 컴포즈 파일이 아니라 router-manager의 Net 관리
   # 탭/API(/api/netgate/forwards)에서 런타임에 하는 것 - docs/router.md 참고.
   code-docker-router:
     networks:
