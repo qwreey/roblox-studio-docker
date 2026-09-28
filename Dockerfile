@@ -220,7 +220,8 @@ COPY config/supervisor/dns-local-service.sh /etc/roblox-studio/dns-local-service
 RUN chmod +x /etc/roblox-studio/*-service.sh
 
 # qwreey/router-docker-client's own subdirectories, fetched directly at build
-# time (floating #main ref, see that repo's own CLAUDE.md) rather than
+# time, pinned to that repo's release tag (see its own CLAUDE.md;
+# code-docker's dev-bump-router-client.sh moves this default) rather than
 # vendored - the same way code-docker pulls them in.
 #
 # dns-local is what gives this container working DNS when it's attached to
@@ -229,8 +230,9 @@ RUN chmod +x /etc/roblox-studio/*-service.sh
 # would break VNC_BIND_ALIAS. netshare comes along only for its wait_until
 # helper, which dns-local uses for a bounded, well-logged first wait on
 # router (it retries fine without it, the log is just less obvious).
-ADD https://github.com/qwreey/router-docker-client.git#main:dns-local /etc/roblox-studio/router-client/dns-local
-ADD https://github.com/qwreey/router-docker-client.git#main:netshare /etc/roblox-studio/router-client/netshare
+ARG ROUTER_CLIENT_REF=v0.1.0
+ADD https://github.com/qwreey/router-docker-client.git#${ROUTER_CLIENT_REF}:dns-local /etc/roblox-studio/router-client/dns-local
+ADD https://github.com/qwreey/router-docker-client.git#${ROUTER_CLIENT_REF}:netshare /etc/roblox-studio/router-client/netshare
 RUN chmod +x /etc/roblox-studio/router-client/dns-local/dns-local.sh
 
 COPY entrypoint.sh /entrypoint.sh
