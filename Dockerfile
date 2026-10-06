@@ -63,24 +63,25 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
     && rm -rf "/tmp/vinegar-${VINEGAR_VERSION}" /tmp/vinegar.tar.gz /root/go /root/.cache
 
 # Kombucha (Vinegar's own Wine build) — PINNED here rather than left to Vinegar's
-# auto-download. See CLAUDE.md's "Wine 11.16 viewport regression" section for the full
-# bisect; short version: on Kombucha `stable+20260824153321` (**wine-11.16**) Roblox
-# Studio's 3D viewport renders nothing. The swapchain presents at full framerate (DXVK's
-# own HUD draws onto it fine) but the composite of the engine's `main targets` into the
-# backbuffer comes out empty, so the editor's document area is blank while every other
-# part of Studio draws correctly. `stable+20260809183117` (**wine-11.15**) is fine.
+# auto-download, so a new Kombucha release can't change the Wine under a working
+# deployment without a rebuild. Two releases have done exactly that: wine-11.16 blanked
+# Studio's 3D viewport (CLAUDE.md's "Wine 11.16 viewport regression"), and every release
+# carries a winex11 patch that crashes without XDG_SESSION_TYPE (the `ENV
+# XDG_SESSION_TYPE` comment below). Verified on this pin: the viewport renders and panels
+# dock, under the X11 driver + virtual desktop this image runs Studio with (CLAUDE.md's
+# "Panels: Wine virtual desktop").
 #
 # Installed under /opt, NOT into Vinegar's own data directory: Vinegar manages
 # `~/.local/share/vinegar/kombucha*` itself and deletes a build there that isn't the one
 # it wants — observed 2026-08-28, pointing `wineroot` at a sibling directory made it
 # remove the pinned build on the very next launch. `config/vinegar/config.toml` points
-# `wineroot` here. The `wine --version` test is what makes a KOMBUCHA_VERSION bump that
-# moves off 11.15 fail the build loudly instead of silently reintroducing the bug.
-# KOMBUCHA_VERSION is URL-encoded (%2B for the `+` in the real tag name,
-# `stable+20260809183117`) because it appears in both the release tag and the asset
-# filename, and GitHub serves neither unencoded.
-ARG KOMBUCHA_VERSION=stable%2B20260809183117
-ARG KOMBUCHA_WINE_VERSION=wine-11.15
+# `wineroot` here, so moving this pin needs no config change on existing deployments.
+# The `wine --version` test makes a KOMBUCHA_VERSION bump fail the build loudly when the
+# tarball isn't the Wine it claims to be. KOMBUCHA_VERSION is URL-encoded (%2B for the
+# `+` in the real tag name, `stable+20261005101806`) because it appears in both the
+# release tag and the asset filename, and GitHub serves neither unencoded.
+ARG KOMBUCHA_VERSION=stable%2B20261005101806
+ARG KOMBUCHA_WINE_VERSION=wine-11.19
 RUN curl -fsSL "https://github.com/vinegarhq/kombucha/releases/download/${KOMBUCHA_VERSION}/kombucha-${KOMBUCHA_VERSION}.tar.xz" -o /tmp/kombucha.tar.xz \
     && mkdir -p /tmp/kombucha \
     && tar xJf /tmp/kombucha.tar.xz -C /tmp/kombucha \
@@ -88,6 +89,13 @@ RUN curl -fsSL "https://github.com/vinegarhq/kombucha/releases/download/${KOMBUC
     && rm -rf /tmp/kombucha /tmp/kombucha.tar.xz \
     && test "$(WINEPREFIX=/tmp/wine-version-probe /opt/kombucha-pinned/bin/wine --version)" = "${KOMBUCHA_WINE_VERSION}" \
     && rm -rf /tmp/wine-version-probe
+
+# Not cosmetic: Kombucha's winex11 does `strcmp(getenv("XDG_SESSION_TYPE"), "wayland")`
+# with no NULL check (its "Don't hide cursor under X11 sessions" patch), so with this
+# unset the X11 driver segfaults during init and Wine silently falls back to
+# winewayland - which can't do Studio's virtual desktop. An image ENV rather than an
+# entrypoint.sh export so a `docker exec` launch and the MCP bridge's Wine get it too.
+ENV XDG_SESSION_TYPE=wayland
 
 # noVNC + websockify — see CLAUDE.md's "VNC embedding" section. wayvnc itself stays raw
 # RFB-only on VNC_PORT (unchanged, still the right choice for native clients like

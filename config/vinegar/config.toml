@@ -8,14 +8,11 @@
 # before re-enabling this.
 webview = ""
 
-# Pin Wine to the build baked in at /opt/kombucha-pinned (see the Dockerfile's own
-# KOMBUCHA_VERSION block) instead of letting Vinegar download the current Kombucha
-# release. Kombucha `stable+20260824153321` (wine-11.16) renders Roblox Studio's 3D
-# viewport as a blank document area; `stable+20260809183117` (wine-11.15) is fine. Full
-# bisect in CLAUDE.md's "Wine 11.16 viewport regression" section. Remove this line (and
-# the Dockerfile block) once upstream fixes it.
+# Pin Wine to the build baked in at /opt/kombucha-pinned instead of letting Vinegar
+# download the current Kombucha release — why, and which release, is the Dockerfile's
+# own KOMBUCHA_VERSION block. The pin moves with the image; this line never has to.
 #
 # Note this file is only seeded on first run (entrypoint.sh never overwrites an existing
-# config.toml), so an already-deployed instance needs this line added by hand — see the
-# same CLAUDE.md section.
+# config.toml), so an already-deployed instance that predates the pin needs this line
+# added by hand.
 wineroot = "/opt/kombucha-pinned"
