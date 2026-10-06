@@ -1,7 +1,7 @@
 # Kombucha's Wine version and the vinegarhq/kombucha commit its pinned release was built
 # from (that release's `created_at`, matched against the repository's history). Global
-# because both the runtime stage's Kombucha pin and winex11-build below need them; move all
-# three together (KOMBUCHA_VERSION is in the runtime stage).
+# because both the runtime stage's Kombucha pin and winex11-build below need them; move them
+# together with KOMBUCHA_VERSION and KOMBUCHA_SHA256 (in the runtime stage).
 ARG KOMBUCHA_WINE_VERSION=wine-11.19
 ARG KOMBUCHA_PATCHES_REF=cdf42b8f1f3a87d8952e072d6a46a0d6aef659e6
 
@@ -165,8 +165,10 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
 # check the viewport renders and panels still dock.
 #
 # Kombucha deletes a release once a newer one is out (only one release exists at a time),
-# so this URL turns 404 soon after each upstream release and an uncached build fails at
-# the curl below - the pin then has to move even when nothing was wrong with it.
+# so the pinned tarball is fetched from this repository's own copy first - a GitHub release
+# named after it (KOMBUCHA_MIRROR) - and from upstream only if that's missing. Either way it
+# has to match KOMBUCHA_SHA256. Moving the pin means mirroring the new tarball first:
+# CLAUDE.md's "Wine 11.16 viewport regression" has the steps.
 #
 # Installed under /opt, NOT into Vinegar's own data directory: Vinegar manages
 # `~/.local/share/vinegar/kombucha*` itself and deletes a build there that isn't the one
@@ -176,10 +178,16 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
 # The `wine --version` test makes a KOMBUCHA_VERSION bump fail the build loudly when the
 # tarball isn't the Wine it claims to be. KOMBUCHA_VERSION is URL-encoded (%2B for the
 # `+` in the real tag name, `stable+20261005133651`) because it appears in both the
-# release tag and the asset filename, and GitHub serves neither unencoded.
+# release tag and the asset filename, and GitHub serves neither unencoded. The copy's
+# release tag and asset name use `-` instead (`kombucha-stable-20261005133651`).
 ARG KOMBUCHA_VERSION=stable%2B20261005133651
+ARG KOMBUCHA_SHA256=45280181cdcf72bf2d7855a8330b359e3cc98c0acb309c5337665d7f1c8326d6
+ARG KOMBUCHA_MIRROR=https://github.com/qwreey/roblox-studio-docker/releases/download
 ARG KOMBUCHA_WINE_VERSION
-RUN curl -fsSL "https://github.com/vinegarhq/kombucha/releases/download/${KOMBUCHA_VERSION}/kombucha-${KOMBUCHA_VERSION}.tar.xz" -o /tmp/kombucha.tar.xz \
+RUN copy="kombucha-$(printf '%s' "${KOMBUCHA_VERSION}" | sed 's/%2B/-/')" \
+    && { curl -fsSL "${KOMBUCHA_MIRROR}/${copy}/${copy}.tar.xz" -o /tmp/kombucha.tar.xz \
+         || curl -fsSL "https://github.com/vinegarhq/kombucha/releases/download/${KOMBUCHA_VERSION}/kombucha-${KOMBUCHA_VERSION}.tar.xz" -o /tmp/kombucha.tar.xz; } \
+    && echo "${KOMBUCHA_SHA256}  /tmp/kombucha.tar.xz" | sha256sum -c - \
     && mkdir -p /tmp/kombucha \
     && tar xJf /tmp/kombucha.tar.xz -C /tmp/kombucha \
     && mv "$(dirname "$(dirname "$(find /tmp/kombucha -type f -name wine -path '*/bin/*' | head -1)")")" /opt/kombucha-pinned \

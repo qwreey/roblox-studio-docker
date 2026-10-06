@@ -786,6 +786,30 @@ for the next time a bump breaks the viewport.
 the download with a 404. Same Wine 11.19 and the same patch set: the only commit between
 the two builds is upstream's "ci: strip unneeded symbols".
 
+**The pinned tarball is mirrored in this repository's GitHub releases** (tag
+`kombucha-stable-20261005133651`), because upstream will delete this release too. The
+Dockerfile fetches the copy first and upstream only as a fallback, and checks
+`KOMBUCHA_SHA256` either way.
+
+Moving the pin:
+
+1. Check the new release in Studio first: the viewport renders and panels still dock.
+2. Mirror it. Run this while upstream still has it; `+` becomes `-` in the tag and the
+   asset name:
+   ```sh
+   v=stable+YYYYMMDDhhmmss; c="kombucha-${v/+/-}"
+   curl -fsSL -o "$c.tar.xz" "https://github.com/vinegarhq/kombucha/releases/download/${v/+/%2B}/kombucha-${v/+/%2B}.tar.xz"
+   sha256sum "$c.tar.xz"
+   gh release create "$c" "$c.tar.xz" --repo qwreey/roblox-studio-docker --target main \
+     --title "Kombucha $v (mirror)" --notes "Unmodified copy of vinegarhq/kombucha's $v; see Dockerfile."
+   ```
+3. Update the four ARGs together: `KOMBUCHA_VERSION` (URL-encoded), `KOMBUCHA_SHA256`,
+   `KOMBUCHA_WINE_VERSION`, and `KOMBUCHA_PATCHES_REF`. The last one is the
+   vinegarhq/kombucha commit the release was built from; `winex11-build` patches that
+   Wine.
+4. Keep old mirror releases. A deployment built from an older commit still needs its
+   copy.
+
 Roblox Studio's **3D viewport renders nothing** on Kombucha `stable+20260824153321`
 (**wine-11.16**). Everything else about Studio is fine: it launches, logs in, the ribbon
 and menus draw, a place opens (title bar, `RobloxIDEDoc::activate`, `SceneManager:
