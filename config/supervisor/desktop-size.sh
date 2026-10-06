@@ -2,8 +2,7 @@
 # everything about sizing Studio's Wine virtual desktop to the screen labwc shows. Why the
 # desktop exists and why it is sized this way: CLAUDE.md's "Panels: Wine virtual desktop".
 
-STUDIO_WINEPREFIX="${HOME:-/root}/.local/share/vinegar/prefixes/studio"
-VINEGAR_CONFIG="${HOME:-/root}/.config/vinegar/config.toml"
+. /etc/roblox-studio/studio-wine.sh
 DESKTOPS_KEY='[Software\\Wine\\Explorer\\Desktops]'
 
 # Prints the virtual-desktop size for a screen of WxH: the screen minus waybar, which sits
@@ -31,20 +30,6 @@ set_vinegar_desktop_size() {
   sed -i "s/^virtual_desktop[[:space:]]*=[[:space:]]*\"[^\"]\+\".*/virtual_desktop = \"$1\"/" "${VINEGAR_CONFIG}"
 }
 
-# The same Wine Vinegar launches Studio with - its config's wineroot, else the Kombucha
-# build Vinegar manages itself. Mirrors config/mcp/studio-mcp-stdio.sh.
-studio_wine_bin() {
-  local wineroot
-  wineroot="$(sed -n 's/^[[:space:]]*wineroot[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "${VINEGAR_CONFIG}" 2>/dev/null | tail -n1)"
-  if [[ -n "${wineroot}" && -x "${wineroot}/bin/wine" ]]; then
-    echo "${wineroot}/bin/wine"
-  elif [[ -x "${HOME:-/root}/.local/share/vinegar/kombucha/bin/wine" ]]; then
-    echo "${HOME:-/root}/.local/share/vinegar/kombucha/bin/wine"
-  else
-    return 1
-  fi
-}
-
 # Sets HKCU\Software\Wine\Explorer\Desktops "Default" to SIZE in Studio's prefix - Wine
 # only accepts a virtual-desktop size from a fixed list of standard resolutions plus this
 # value, and silently stays at the screen size (fullscreen) otherwise. Through `wine reg`
@@ -52,13 +37,12 @@ studio_wine_bin() {
 # itself (and on a fresh Kombucha, update the prefix) outside Vinegar's control. A later
 # section of a key overrides an earlier one when Wine loads user.reg, and Wine rewrites the
 # file as one section on its next save, so the text path only ever appends.
+# Returns 2 when Vinegar hasn't created the prefix yet, 1 when writing failed.
 set_wine_default_desktop_size() {
-  local size="$1" user_reg="${STUDIO_WINEPREFIX}/user.reg" wine current
-  [[ -f "${user_reg}" ]] || return 0
+  local size="$1" user_reg="${STUDIO_WINEPREFIX}/user.reg" current
+  [[ -f "${user_reg}" ]] || return 2
   if pgrep -x wineserver >/dev/null; then
-    wine="$(studio_wine_bin)" || return 1
-    WINEPREFIX="${STUDIO_WINEPREFIX}" WINEDEBUG=-all "${wine}" reg add \
-      'HKCU\Software\Wine\Explorer\Desktops' /v Default /d "${size}" /f >/dev/null 2>&1
+    wine_reg_set_default_desktop_size "${size}"
     return
   fi
   current="$(DESKTOPS_KEY="${DESKTOPS_KEY}" awk '
@@ -69,4 +53,16 @@ set_wine_default_desktop_size() {
   ' "${user_reg}")"
   [[ "${current}" == "\"Default\"=\"${size}\"" ]] && return 0
   printf '\n%s\n"Default"="%s"\n' "${DESKTOPS_KEY}" "${size}" >> "${user_reg}"
+  # A wineserver that started between the check above and the append has already loaded
+  # user.reg without the new value, and will rewrite the file without it - tell it directly.
+  if pgrep -x wineserver >/dev/null; then
+    wine_reg_set_default_desktop_size "${size}"
+  fi
+}
+
+wine_reg_set_default_desktop_size() {
+  local wine
+  wine="$(studio_wine_bin)" || return 1
+  WINEPREFIX="${STUDIO_WINEPREFIX}" WINEDEBUG=-all "${wine}" reg add \
+    'HKCU\Software\Wine\Explorer\Desktops' /v Default /d "$1" /f >/dev/null 2>&1
 }

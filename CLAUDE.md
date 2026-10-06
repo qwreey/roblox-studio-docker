@@ -380,7 +380,12 @@ virtual desktop filling the screen above waybar. Each piece is load-bearing:
   (`desktop-resize-service.sh`) polls the output, waits for it to settle (a dragged
   browser window sends a burst), updates `"Default"` and Vinegar's `virtual_desktop`, and
   when Studio is up runs `desktop-resize.exe` (built from `config/desktop-resize/` in its
-  own Dockerfile stage) inside Studio's desktop. That tool's comments carry the three Wine
+  own Dockerfile stage) inside Studio's desktop. It does the same for every newly launched
+  Studio desktop, writing `"Default"` through the now-running wineserver first — the only
+  way a fresh install's first launch (prefix and desktop created back to back) or a
+  recreated prefix gets the right size. The tool reports `ok`/`refused` through
+  `/tmp/desktop-resize.status`, since the `wine explorer` launcher drops its exit status.
+  That tool's comments carry the three Wine
   quirks it works around — maximized windows aren't refitted, the taskbar isn't taken out
   of the new work area, and the desktop process resets the work area ~1s after the change
   — each found by tracing the tray rect and work area step by step. ~2s per resize;

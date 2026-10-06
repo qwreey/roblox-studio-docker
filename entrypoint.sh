@@ -103,11 +103,15 @@ if ! virtual_desktop_size="$(desktop_size_for_screen "${DESKTOP_RESOLUTION}")"; 
   exit 1
 fi
 virtual_desktop_marker="${HOME}/.config/vinegar/.virtual-desktop-added"
+# TOML allows spaces inside the brackets and a comment after them; appending a second
+# [studio] table instead would make the whole config unparseable for Vinegar.
+studio_table_header='^[[:space:]]*\[[[:space:]]*studio[[:space:]]*\][[:space:]]*(#.*)?$'
 if [[ ! -f "${virtual_desktop_marker}" ]]; then
   if grep -q '^virtual_desktop[[:space:]]*=' "${vinegar_config}"; then
     echo "[entrypoint] Vinegar config already sets virtual_desktop - leaving it"
-  elif grep -q '^\[studio\][[:space:]]*$' "${vinegar_config}"; then
-    sed -i "/^\[studio\][[:space:]]*\$/a virtual_desktop = \"${virtual_desktop_size}\"" "${vinegar_config}"
+  elif grep -Eq "${studio_table_header}" "${vinegar_config}"; then
+    sed -E -i "0,/${studio_table_header}/{/${studio_table_header}/a virtual_desktop = \"${virtual_desktop_size}\"
+}" "${vinegar_config}"
     echo "[entrypoint] enabled Vinegar's virtual_desktop (${virtual_desktop_size})"
   else
     printf '\n[studio]\nvirtual_desktop = "%s"\n' "${virtual_desktop_size}" >> "${vinegar_config}"

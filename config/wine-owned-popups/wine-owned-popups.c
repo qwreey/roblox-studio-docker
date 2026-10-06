@@ -99,21 +99,44 @@ int main(void)
         if (children) XFree(children);
     }
 
+    /* Handle whatever has queued up, then restack each parent that changed once - a dragged
+     * window sends a ConfigureNotify per motion step, and a restack pass costs several
+     * round trips per child. */
+    Window dirty[64];
+    int dirty_count;
     for (;;)
     {
         XEvent event;
-        XNextEvent(display, &event);
-        switch (event.type)
+        Window parent = None;
+
+        dirty_count = 0;
+        do
         {
-        case CreateNotify:
-            if (event.xcreatewindow.parent == root) watch_children(display, event.xcreatewindow.window);
-            break;
-        case ConfigureNotify:
-            if (event.xconfigure.event != root) restack(display, event.xconfigure.event);
-            break;
-        case MapNotify:
-            if (event.xmap.event != root) restack(display, event.xmap.event);
-            break;
-        }
+            XNextEvent(display, &event);
+            switch (event.type)
+            {
+            case CreateNotify:
+                if (event.xcreatewindow.parent == root) watch_children(display, event.xcreatewindow.window);
+                parent = None;
+                break;
+            case ConfigureNotify:
+                parent = event.xconfigure.event;
+                break;
+            case MapNotify:
+                parent = event.xmap.event;
+                break;
+            default:
+                parent = None;
+                break;
+            }
+            if (parent != None && parent != root)
+            {
+                int seen = 0;
+                for (int i = 0; i < dirty_count; i++) seen |= dirty[i] == parent;
+                if (!seen && dirty_count < (int)(sizeof(dirty) / sizeof(*dirty))) dirty[dirty_count++] = parent;
+            }
+        } while (XPending(display));
+
+        for (int i = 0; i < dirty_count; i++) restack(display, dirty[i]);
     }
 }

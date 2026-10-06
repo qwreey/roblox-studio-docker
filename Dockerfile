@@ -78,9 +78,8 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
 # deployment without a rebuild. Two releases have done exactly that: wine-11.16 blanked
 # Studio's 3D viewport (CLAUDE.md's "Wine 11.16 viewport regression"), and every release
 # carries a winex11 patch that crashes without XDG_SESSION_TYPE (the `ENV
-# XDG_SESSION_TYPE` comment below). Verified on this pin: the viewport renders and panels
-# dock, under the X11 driver + virtual desktop this image runs Studio with (CLAUDE.md's
-# "Panels: Wine virtual desktop").
+# XDG_SESSION_TYPE` comment below). Before moving it, open a place on the new build and
+# check the viewport renders and panels still dock.
 #
 # Installed under /opt, NOT into Vinegar's own data directory: Vinegar manages
 # `~/.local/share/vinegar/kombucha*` itself and deletes a build there that isn't the one
@@ -247,6 +246,7 @@ COPY config/supervisor/novnc-service.sh /etc/roblox-studio/novnc-service.sh
 COPY config/supervisor/mcp-bridge-service.sh /etc/roblox-studio/mcp-bridge-service.sh
 COPY config/supervisor/critical-watchdog-service.sh /etc/roblox-studio/critical-watchdog-service.sh
 COPY config/supervisor/dns-local-service.sh /etc/roblox-studio/dns-local-service.sh
+COPY config/supervisor/studio-wine.sh /etc/roblox-studio/studio-wine.sh
 COPY config/supervisor/desktop-size.sh /etc/roblox-studio/desktop-size.sh
 COPY config/supervisor/desktop-resize-service.sh /etc/roblox-studio/desktop-resize-service.sh
 COPY --from=desktop-resize-build /src/desktop-resize.exe /usr/local/lib/roblox-studio/desktop-resize.exe
