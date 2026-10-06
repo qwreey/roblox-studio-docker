@@ -58,6 +58,15 @@ RUN unzip -q /tmp/rojo.zip -d /usr/local/bin && chmod +x /usr/local/bin/rojo
 COPY config/studio-sync/plugin /src
 RUN ROJO_REF="v${ROJO_VERSION}" /src/build.sh /src/StudioSync.rbxm
 
+# LuauLSP.rbxm - luau-lsp's Studio companion plugin, with studio-defaults.patch (default
+# host studio-front, auto-connect with retries). Reuses the stage above for git and rojo.
+# LUAU_LSP_REF should match the luau-lsp extension version installed in code-server.
+FROM studio-sync-plugin-build AS luau-lsp-plugin-build
+ARG LUAU_LSP_REF=1.70.1
+RUN pacman -S --noconfirm --needed patch
+COPY config/luau-lsp-plugin /src-luau-lsp
+RUN LUAU_LSP_REF="${LUAU_LSP_REF}" /src-luau-lsp/build.sh /src-luau-lsp/LuauLSP.rbxm
+
 FROM archlinux:latest AS base
 
 RUN pacman -Syu --noconfirm --needed \
@@ -334,7 +343,7 @@ RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh /us
 # Dockerfile, which does the same for the same reason.
 RUN mkdir -p /etc/roblox-studio/supervisord.d \
       /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog \
-      /var/log/dns-local /var/log/desktop-resize /var/log/wine-owned-popups /var/log/studio-sync-plugin /var/log/studio-output
+      /var/log/dns-local /var/log/desktop-resize /var/log/wine-owned-popups /var/log/studio-plugins /var/log/studio-output
 COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
 COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
 COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
@@ -350,9 +359,10 @@ COPY config/supervisor/desktop-size.sh /etc/roblox-studio/desktop-size.sh
 COPY config/supervisor/desktop-resize-service.sh /etc/roblox-studio/desktop-resize-service.sh
 COPY --from=desktop-resize-build /src/desktop-resize.exe /usr/local/lib/roblox-studio/desktop-resize.exe
 COPY config/supervisor/wine-owned-popups-service.sh /etc/roblox-studio/wine-owned-popups-service.sh
-COPY config/supervisor/studio-sync-plugin-service.sh /etc/roblox-studio/studio-sync-plugin-service.sh
+COPY config/supervisor/studio-plugins-service.sh /etc/roblox-studio/studio-plugins-service.sh
 COPY config/studio-output/studio-output-service.py /usr/local/lib/roblox-studio/studio-output-service.py
 COPY --from=studio-sync-plugin-build /src/StudioSync.rbxm /usr/local/lib/roblox-studio/StudioSync.rbxm
+COPY --from=luau-lsp-plugin-build /src-luau-lsp/LuauLSP.rbxm /usr/local/lib/roblox-studio/LuauLSP.rbxm
 # Built here rather than in a separate stage: gcc (base-devel) and libX11 are already in
 # this image. What it does and why: its own header comment.
 COPY config/wine-owned-popups/wine-owned-popups.c /tmp/wine-owned-popups.c

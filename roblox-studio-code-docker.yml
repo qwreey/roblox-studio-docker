@@ -52,8 +52,11 @@ services:
       VNC_BIND_ALIAS: roblox-studio-vnc
       # studio-sync의 Studio 쪽 플러그인을 Studio Plugins 폴더에 넣는다(끄면 빼낸다).
       # 플러그인이 studio-front:34880을 찾기 때문에 code-docker와 붙을 때만 의미가 있어서
-      # 단독 실행 기본값은 off - config/supervisor/studio-sync-plugin-service.sh 참고.
+      # 단독 실행 기본값은 off - config/supervisor/studio-plugins-service.sh 참고.
       STUDIO_SYNC_PLUGIN: "${STUDIO_SYNC_PLUGIN:-true}"
+      # luau-lsp의 Studio 동반 플러그인(DataModel을 VS Code의 luau-lsp 확장에 보내 자동완성에
+      # 쓰게 함)도 같은 서비스가 넣고 뺀다 - config/luau-lsp-plugin/ 참고.
+      STUDIO_LUAU_LSP_PLUGIN: "${STUDIO_LUAU_LSP_PLUGIN:-true}"
     networks:
       # code-docker-internal에는 붙지 않는다. 플러그인이나 스크립트가 HttpService로
       # 임의 요청을 보낼 수 있는 컨테이너라, 거기 붙으면 code-docker의 nginx(로그인 없는

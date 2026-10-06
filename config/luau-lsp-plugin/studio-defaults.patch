@@ -1,0 +1,45 @@
+--- a/plugin/src/init.server.luau
++++ b/plugin/src/init.server.luau
+@@ -80,6 +80,22 @@
+ 	lspManager:autoConnect()
+ end
+ 
++-- roblox-studio-docker: keep trying while startAutomatically is on. Studio here runs for
++-- days, and the language server only exists while a VS Code window is open, so a single
++-- attempt at Studio's start almost never finds it.
++local retrying = true
++plugin.Unloading:Connect(function()
++	retrying = false
++end)
++task.spawn(function()
++	while retrying do
++		task.wait(10)
++		if settings:get("startAutomatically") and not lspManager:isConnected() then
++			lspManager:autoConnect()
++		end
++	end
++end)
++
+ --- Clean up connections when the plugin is unloaded.
+ plugin.Unloading:Connect(function()
+ 	lspManager:unload()
+--- a/plugin/src/Settings/DefaultSettings.luau
++++ b/plugin/src/Settings/DefaultSettings.luau
+@@ -4,7 +4,7 @@
+ 
+ return {
+ 	--- The host to connect to the language server.
+-	host = "http://localhost",
++	host = "http://studio-front",
+ 
+ 	--- The port to connect to the language server.
+ 	--- In VSCode, this is configured using `luau-lsp.studioPlugin.port`
+@@ -12,7 +12,7 @@
+ 	port = 3667,
+ 
+ 	--- Whether the plugin should automatically connect to the language server when Studio starts up
+-	startAutomatically = false,
++	startAutomatically = true,
+ 
+ 	--- A list of Instances to track for changes.
+ 	--- When any descendants of these instances change, an update event is sent to the language server

@@ -1198,6 +1198,45 @@ and `studio-front`.
   `.claude/backlog/next-pass-plan.md` §3 plans the same split. Its reverse direction is
   dev servers on arbitrary ports, not a fixed list.
 
+## luau-lsp companion plugin: DataModel autocompletion in VS Code — 2026-10-06
+
+luau-lsp's VS Code extension can complete `game.Workspace.Foo...` from the live
+DataModel. The data comes from its Studio companion plugin, which POSTs the instance tree
+to an HTTP server the extension runs on port 3667 (`luau-lsp.studioPlugin.enabled`). In
+code-docker that server runs inside code-docker, where code-server's extension host
+runs, and Studio reaches it as `studio-front:3667`.
+
+**The plugin is built here** (`config/luau-lsp-plugin/build.sh`, Dockerfile stage
+`luau-lsp-plugin-build`). It is luau-lsp's own `plugin/` at `LUAU_LSP_REF` (1.70.1, the
+extension's Open VSX version), changed only by `studio-defaults.patch`, applied with
+`--fuzz=0`:
+
+- **Default host is `http://studio-front`**, and `startAutomatically` is true. The
+  plugin keeps its settings in a ModuleScript, `TestService.LuauLSP_Settings`, which it
+  creates in every place it opens from these defaults. A place that already has one keeps
+  its own values.
+- **A retry every 10 s while not connected.** Upstream tries once, when Studio starts.
+  Here Studio runs for days and the extension's server exists only while a VS Code window
+  is open. A failed attempt is silent in Studio's Output; Studio's log gets its usual
+  HttpTraceError lines.
+
+`studio-plugins` installs it as `LuauLSP.rbxm` (`STUDIO_LUAU_LSP_PLUGIN`, on in the
+overlay).
+
+**Side effect of upstream's design.** Every place opened gets
+`TestService.LuauLSP_Settings`, which is saved with the place. Its `host` is
+`studio-front`, which means nothing outside this setup. Delete the module from a place
+that leaves this setup, or let that Studio's own copy of the plugin rewrite it.
+
+**Verified on the test stack** against a stand-in for the extension's server: a listener
+on code-docker:3667 that decodes the plugin's gzip body.
+
+- Studio started with nothing on 3667. Once the listener came up, the plugin connected
+  within 7 s ("[Luau LSP] INFO: Successfully connected") and sent `/full`.
+- After a studio-sync added `ServerStorage.AgentB.C`, the next `/full` contained it.
+- The real extension was not run here; the endpoints (`/full`, `/clear`,
+  `/get-file-paths`) are the same ones its source serves.
+
 ## studio-output: Studio's Output window from code-docker — 2026-10-06
 
 `studio-output`, run in code-docker (a VS Code terminal, or an agent), shows what Studio's
@@ -1275,8 +1314,9 @@ owned: ReplicatedStorage.Shared, ServerScriptService.Server
     `start()` adds.
   - Afterwards it sets `AgentOwner` on the project's instances directly under a service
     and posts the result.
-- **`config/supervisor/studio-sync-plugin-service.sh`** copies the plugin into Studio's
-  local Plugins folder once per boot, or removes it. It waits for a fresh install's first
+- **`config/supervisor/studio-plugins-service.sh`** (supervisord `studio-plugins`)
+  copies the plugin into Studio's local Plugins folder once per boot, or removes it. It
+  handles the luau-lsp plugin below the same way. It waits for a fresh install's first
   launch to create the folder. `STUDIO_SYNC_PLUGIN` is on only in the code-docker
   overlay; standalone there is no `studio-front` to poll.
 - **The overlay** mounts `config/studio-sync` into code-docker at
