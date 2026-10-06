@@ -9,8 +9,18 @@
 }
 
 :{$MCP_PORT} {
-	@unauthorized not header Authorization "Bearer {$MCP_TOKEN}"
-	respond @unauthorized "unauthorized" 401
+	# `route` runs these in the order written. Caddy's default directive order puts
+	# handle/handle_path ahead of respond, which would skip the token check.
+	route {
+		@unauthorized not header Authorization "Bearer {$MCP_TOKEN}"
+		respond @unauthorized "unauthorized" 401
 
-	reverse_proxy 127.0.0.1:{$MCP_UPSTREAM_PORT}
+		# Studio's script output for code-docker's `studio-output`, behind the same token
+		# (config/studio-output/studio-output-service.py).
+		handle_path /studio-output/* {
+			reverse_proxy 127.0.0.1:{$STUDIO_OUTPUT_PORT:8809}
+		}
+
+		reverse_proxy 127.0.0.1:{$MCP_UPSTREAM_PORT}
+	}
 }

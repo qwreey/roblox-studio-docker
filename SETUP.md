@@ -373,6 +373,19 @@ studio-sync path/to/x.project.json --owner my-task --json
   to `studio-front`, which forwards to code-docker.
 - How it works and what was measured: CLAUDE.md's "studio-sync".
 
+## Studio's Output from code-docker (`studio-output`)
+
+Only with code-docker, and only while the MCP bridge is on (it reads through the
+bridge's port and token). In a code-docker terminal, a VS Code one for example:
+
+```sh
+studio-output                # the last 50 lines, then keeps following
+studio-output -n 200 --no-follow --level warning
+```
+
+It covers edit mode, plugins, and a playtest's server and client. CLAUDE.md's
+"studio-output" has how it works.
+
 ## If something breaks
 
 Check, in this order (all are documented in more depth in `CLAUDE.md`'s "Milestone 3"

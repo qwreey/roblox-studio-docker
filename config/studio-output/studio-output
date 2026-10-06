@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Show Roblox Studio's Output (print, warn, error) here, like `tail -f`.
+
+Reads studio-output-service.py's lines through the MCP bridge (same port and bearer
+token, path /studio-output), so it needs MCP_TOKEN - the overlay hands it to code-docker.
+Covers edit mode, plugins, and a playtest's server and client.
+"""
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+URL = os.environ.get("STUDIO_OUTPUT_URL", "http://studio:8787/studio-output")
+COLORS = {"warning": "\033[33m", "error": "\033[31m"}
+RESET = "\033[0m"
+
+
+def fetch(query, timeout):
+    request = urllib.request.Request(
+        f"{URL}/lines?{query}", headers={"Authorization": f"Bearer {os.environ.get('MCP_TOKEN', '')}"}
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def show(line, color, as_json):
+    if as_json:
+        print(json.dumps(line, ensure_ascii=False), flush=True)
+        return
+    clock = line["time"][11:19]
+    text = line["text"]
+    if color and line["level"] in COLORS:
+        text = f"{COLORS[line['level']]}{text}{RESET}"
+    print(f"{clock}  {text}", flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("-n", "--lines", type=int, default=50, help="lines of history to start with (default 50)")
+    parser.add_argument("--no-follow", action="store_true", help="print the history and exit")
+    parser.add_argument("--level", choices=["info", "warning", "error"], default="info",
+                        help="show this level and above (default: everything)")
+    parser.add_argument("--json", action="store_true", help="one JSON object per line")
+    args = parser.parse_args()
+    if not os.environ.get("MCP_TOKEN"):
+        sys.exit("studio-output: MCP_TOKEN is not set - it's the token of Studio's MCP bridge, "
+                 "which this reads through")
+
+    order = ["info", "warning", "error"]
+    wanted = set(order[order.index(args.level):])
+    color = sys.stdout.isatty() and not args.json
+
+    def emit(batch):
+        for line in batch:
+            if line["level"] in wanted:
+                show(line, color, args.json)
+
+    try:
+        first = fetch(f"tail={args.lines}", 10)
+    except urllib.error.HTTPError as error:
+        sys.exit(f"studio-output: {URL} answered {error.code}"
+                 + (" - MCP_TOKEN doesn't match Studio's" if error.code == 401 else ""))
+    except OSError as error:
+        sys.exit(f"studio-output: can't reach {URL} ({error}) - is the studio container up with MCP_TOKEN set?")
+    emit(first["lines"])
+    if args.no_follow:
+        return 0
+
+    since, unreachable = first["next"], False
+    while True:
+        try:
+            batch = fetch(f"since={since}&wait=25", 35)
+        except OSError as error:
+            if not unreachable:
+                print(f"studio-output: lost {URL} ({error}), retrying...", file=sys.stderr)
+                unreachable = True
+            time.sleep(3)
+            continue
+        if unreachable:
+            print("studio-output: reconnected", file=sys.stderr)
+            unreachable = False
+        if batch["gap"]:
+            print("studio-output: some lines were dropped (Studio printed faster than this kept up)",
+                  file=sys.stderr)
+        if batch["next"] < since:
+            # The studio container restarted and started counting again.
+            since = 0
+            continue
+        emit(batch["lines"])
+        since = batch["next"]
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

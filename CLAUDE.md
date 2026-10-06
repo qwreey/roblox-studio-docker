@@ -534,8 +534,10 @@ one move.
 - **In Studio itself**, with the labwc and Xwayland patches only (scripted right-drag,
   yaw from a plugin printing `workspace.CurrentCamera`): 40 px gave -24°, -40°, -61.6° and
   -120° in 4, 10, 20 and 40 steps. No longer quadratic, but still growing with the number
-  of events, by about 3° per event. Not yet re-measured with the winex11 patch, which is
-  the remaining per-event leak the probe showed.
+  of events, by about 3° per event.
+  - With all three patches, 40 px gave -16° in 4, 10, 20 and 40 steps alike, and 400 px
+    in 100 steps gave -160°. That is 0.4° per pixel whatever the step count; two runs
+    gave the same numbers.
 - **Not covered**: a drag still ends at the edge of the viewer's window, since nothing
   recentres the viewer's own pointer (that would need browser Pointer Lock in noVNC plus a
   relative-motion RFB extension wayvnc doesn't have). And a client that warps the pointer
@@ -1196,6 +1198,44 @@ and `studio-front`.
   `.claude/backlog/next-pass-plan.md` §3 plans the same split. Its reverse direction is
   dev servers on arbitrary ports, not a fixed list.
 
+## studio-output: Studio's Output window from code-docker — 2026-10-06
+
+`studio-output`, run in code-docker (a VS Code terminal, or an agent), shows what Studio's
+Output window shows and keeps following it, like `tail -f`. Options:
+
+- `-n N` sets how many lines of history to show first.
+- `--no-follow` prints the history and exits.
+- `--level warning` shows warnings and errors only.
+- `--json` prints one JSON object per line.
+
+It works from Studio's log file, not from a plugin. Studio writes every Output line there
+as `[FLog::CreatorOutput]`, `[FLog::CreatorWarning]` or `[FLog::CreatorError]`. That covers
+edit mode, plugins, and a playtest's server and client, all in the one log of the Studio
+process (measured: a `print` in a synced server Script showed up during F5).
+
+**Pieces:**
+
+- **`config/studio-output/studio-output-service.py`** (supervisord `studio-output`, in the
+  studio container):
+  - It follows every `*.log` in Vinegar's `appdata/Roblox/logs`. Each Studio process
+    writes its own, and a short-lived helper process can start after the main one.
+  - It keeps only those three kinds of line, without Studio's `Warning: ` / `Error: ` /
+    `Info: ` prefixes. A line with no timestamp continues the previous output line.
+  - The lines go into a 5000-line ring buffer, served on `127.0.0.1:8809` with long
+    polling.
+  - **Only those lines leave the process.** The rest of the log is Studio's whole
+    diagnostic stream, network traces included, and is never served.
+- **Caddy** (`config/mcp/Caddyfile`) serves it at `studio:8787/studio-output/` behind the
+  MCP bridge's bearer token. So it needs `MCP_TOKEN`, which code-docker has whenever the
+  bridge is on.
+  - The routes sit in a `route` block on purpose. Caddy's default directive order runs
+    `handle`/`handle_path` before `respond`, so the first version (top-level `handle`
+    blocks) served `/studio-output` and `/mcp` with no token at all.
+  - That was caught on the test stack before it was committed. After the fix, a missing
+    or wrong token gives 401 on both paths.
+- **`config/studio-output/studio-output`** (CLI) is mounted into code-docker by the
+  overlay, the same way as studio-sync.
+
 ## studio-sync: one-shot Rojo syncs for agents — 2026-10-06
 
 Before this, an agent could not get a Rojo project into Studio on its own. Connecting
@@ -1344,8 +1384,9 @@ message passes through unchanged.
   tools. Writing it into a Rojo `project.json` was rejected: that file is the real,
   public project.
 - **Verified:** with a fake server, and through a real `supergateway --stateful`, which
-  forwards the child's `initialize` response rather than writing its own. Not yet
-  verified against StudioMCP.exe itself.
+  forwards the child's `initialize` response rather than writing its own. Then
+  end-to-end against StudioMCP.exe on the test stack: the `instructions` are Studio's own
+  ("Studio MCP Proxy - bridges MCP clients with Roblox Studio") followed by the note.
 
 ## Process supervision: switched to `supervisord` — 2026-08-13
 

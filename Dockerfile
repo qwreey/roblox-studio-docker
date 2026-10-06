@@ -334,7 +334,7 @@ RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh /us
 # Dockerfile, which does the same for the same reason.
 RUN mkdir -p /etc/roblox-studio/supervisord.d \
       /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog \
-      /var/log/dns-local /var/log/desktop-resize /var/log/wine-owned-popups /var/log/studio-sync-plugin
+      /var/log/dns-local /var/log/desktop-resize /var/log/wine-owned-popups /var/log/studio-sync-plugin /var/log/studio-output
 COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
 COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
 COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
@@ -351,6 +351,7 @@ COPY config/supervisor/desktop-resize-service.sh /etc/roblox-studio/desktop-resi
 COPY --from=desktop-resize-build /src/desktop-resize.exe /usr/local/lib/roblox-studio/desktop-resize.exe
 COPY config/supervisor/wine-owned-popups-service.sh /etc/roblox-studio/wine-owned-popups-service.sh
 COPY config/supervisor/studio-sync-plugin-service.sh /etc/roblox-studio/studio-sync-plugin-service.sh
+COPY config/studio-output/studio-output-service.py /usr/local/lib/roblox-studio/studio-output-service.py
 COPY --from=studio-sync-plugin-build /src/StudioSync.rbxm /usr/local/lib/roblox-studio/StudioSync.rbxm
 # Built here rather than in a separate stage: gcc (base-devel) and libX11 are already in
 # this image. What it does and why: its own header comment.
