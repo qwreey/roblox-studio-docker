@@ -432,6 +432,34 @@ desktop doesn't repaint behind it — a black rectangle where its popup was, and
 bar left drawn after restoring. With the shell on, neither happens.
 "Plugins → Plugins Folder" opens Wine's own file browser inside the desktop.
 
+**Turning it off**: delete the `virtual_desktop` line from `data/vinegar-config/config.toml`
+(the marker keeps it deleted, and `desktop-resize` leaves a config without it alone) and
+relaunch Studio. Docking and floating-panel resizing break again; everything else works.
+
+**Seen once, not explained** — check these first if they come back:
+- One launch hung on a white main window right after Studio loaded its built-in plugins
+  (`[FLog::StudioHangMonitor] Hang Detected` in the Roblox log, `~/.local/share/vinegar/
+  appdata/Roblox/logs/`). It was the first launch on a freshly copied data directory, in
+  which Vinegar also updated the prefix and installed DXVK; killing everything and
+  relaunching came up fine, and it didn't recur.
+- On a fresh install's first launch, the resize that shrinks the fullscreen desktop to the
+  area above waybar can leave an unrepainted white strip near the desktop's bottom until
+  something redraws there.
+- Not tested: a second `vinegar run` while Studio is up. Vinegar names every desktop with a
+  fresh UUID, so it may open a second Wine desktop window rather than join the first
+  (`desktop-resize` only follows the first one `pgrep` finds).
+
+**Debugging it again**: drive the session with a scripted RFB client
+(`vncdotool` from PyPI: `vncdo -s 127.0.0.1::<port> move X Y mousedown 1 ... mouseup 1`) and
+read the result with `grim` — a VNC screenshot via vncdo came back unusable. `xwininfo
+-root -tree` (pacman `xorg-xwininfo`, ad hoc) shows every Wine window as a child of its
+`<uuid> - Wine Desktop` X window, in X stacking order; `xprop -id` on one shows its
+`WM_TRANSIENT_FOR`. For the win32 side (z-order, work area, foreground), a few-line Win32
+probe built with `x86_64-w64-mingw32-gcc` and started inside the desktop
+(`wine explorer /desktop=<uuid> probe.exe`) answers what X can't — mind the work-area trap
+above, and that a console probe started through `cmd /c` becomes the foreground window
+itself.
+
 **File manager**: the Linux-side one is Thunar. Nautilus is pulled in by
 `xdg-desktop-portal-gnome` and refuses to run as root; the Dockerfile hides it from the
 launcher, removes its `org.freedesktop.FileManager1` D-Bus service (Thunar ships its
