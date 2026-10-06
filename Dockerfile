@@ -45,6 +45,7 @@ RUN pacman -Syu --noconfirm --needed \
       xdg-desktop-portal-gtk \
       xdg-desktop-portal-gnome \
       chromium \
+      thunar \
       grim \
       waybar \
       wofi \
@@ -177,6 +178,17 @@ RUN chmod +x /etc/xdg/labwc/autostart /etc/xdg/labwc/wofi-toggle.sh
 # shows up alongside Vinegar's own and the chromium-nosandbox one added above.
 RUN printf '[Desktop Entry]\nVersion=1.0\nName=Terminal\nExec=foot\nTerminal=false\nIcon=utilities-terminal\nType=Application\nCategories=System;TerminalEmulator;\n' \
       > /usr/share/applications/foot.desktop
+
+# Thunar, not Nautilus, is the file manager. Nautilus is only here as a dependency of
+# xdg-desktop-portal-gnome (needed for OpenURI, see entrypoint.sh) and refuses to start
+# as root ("Running as root is not supported") — and everything in this container runs
+# as root. Hidden from the launcher, its org.freedesktop.FileManager1 D-Bus service
+# removed (Thunar ships one too; with both installed in the same directory, D-Bus
+# activation picks either), and directories handed to Thunar instead.
+RUN sed -i '/^\[Desktop Entry\]$/a NoDisplay=true' /usr/share/applications/org.gnome.Nautilus.desktop \
+    && test "$(grep -c '^NoDisplay=true' /usr/share/applications/org.gnome.Nautilus.desktop)" = 1 \
+    && rm /usr/share/dbus-1/services/org.freedesktop.FileManager1.service \
+    && xdg-mime default thunar.desktop inode/directory
 
 # Rebuild the desktop-file MIME association cache — this must come *after* every
 # .desktop file above, Vinegar's included. Vinegar's `make install` installs its
