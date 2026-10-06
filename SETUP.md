@@ -188,6 +188,12 @@ scary "host key changed" warning every time the container comes back up.
    automatically — you'll land on Studio's normal dashboard, logged in.
 5. This only needs to happen once — the login token persists across container restarts
    (confirmed: a full `docker compose down && up` came back up already logged in).
+6. **Never run a copy of a logged-in `data/` next to the original.** Studio's login is
+   an OAuth refresh token, and Roblox revokes the whole grant when a used token is
+   presented again. The first copy to launch rotates the token; the other then fails
+   with `invalid_grant: Token has been revoked`, and so do both from then on (seen
+   2026-10-06: Studio's log reads "Authenticated : NO"). Each extra container needs its
+   own browser login.
 
 ## Debugging without a VNC client (for Claude Code sessions / headless checks)
 
