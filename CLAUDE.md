@@ -1066,7 +1066,8 @@ and `studio-front`.
   - code-docker → `studio:8787` (MCP; Caddy still checks the token). `studio` is
     `studio-front`'s alias on `code-docker-internal`.
   - Studio → `code-docker:<STUDIO_CODE_DOCKER_PORTS>` (default `34872-34881 3667`:
-    `rojo serve` and luau-lsp's Studio plugin). `code-docker` is `studio-front`'s alias
+    34872-34879 for ordinary `rojo serve`, 34880-34881 for studio-sync, 3667 for
+    luau-lsp's Studio plugin). `code-docker` is `studio-front`'s alias
     on `roblox-studio-net`, so plugin host settings keep saying `code-docker`. The
     server on the code-docker side has to bind a non-loopback address
     (`rojo serve --address 0.0.0.0`).
@@ -1083,6 +1084,104 @@ and `studio-front`.
 - **Chrome has the same problem.** code-docker-chrome's
   `.claude/backlog/next-pass-plan.md` §3 plans the same split. Its reverse direction is
   dev servers on arbitrary ports, not a fixed list.
+
+## studio-sync: one-shot Rojo syncs for agents — 2026-10-06
+
+Before this, an agent could not get a Rojo project into Studio on its own. Connecting
+Rojo's plugin is a click in Studio's UI, and a live session has three problems: it holds
+the place for one project at a time, it pushes every save while the agent is mid-edit,
+and the alternative was reading files into MCP tool calls. `studio-sync`, run in a project
+directory in code-docker, syncs once and disconnects:
+
+```
+$ studio-sync
+studio-sync: serving default.project.json as agent-a on :34880, waiting for Studio...
+synced into AgentTestPlace.rbxl as agent-a: +1 ~1 -0
+owned: ReplicatedStorage.Shared, ServerScriptService.Server
+```
+
+**Pieces**, all in `config/studio-sync/`:
+
+- **`studio-sync`** (Python CLI, code-docker side):
+  - It runs the project's own `rojo serve`, whatever mise or PATH resolves in the project
+    directory, on port 34880, for the length of one sync.
+  - The project it serves is a temporary wrapper: `{"name": "studio-sync owner=<owner>
+    reply=34881", "tree": {"$path": "<the real project file>"}}`. Rojo accepts a project
+    file as the root `$path` (measured), so nothing in the repository is written.
+  - It waits on 34881 for the plugin's claim and result, prints a summary (or `--json`),
+    and stops `rojo serve`.
+  - The owner is `--owner`, else `$STUDIO_SYNC_OWNER`, else the git branch.
+- **`plugin/`** builds `StudioSync.rbxm` (`build.sh`, run by the Dockerfile's
+  `studio-sync-plugin-build` stage):
+  - It is Rojo's own plugin at the pinned release, unmodified, with
+    `plugin/src/init.server.lua` (Rojo's UI entry point) replaced by
+    `StudioSync.server.lua`.
+  - Every 2 s that script asks `code-docker:34880` for `/api/rojo`. When the project name
+    is a request, it claims it at the reply port (with several places open, one wins).
+  - It then runs `ServeSession:__initialSync` only. That is Rojo's own hydrate, diff and
+    reconcile, but without the status changes, place-id writes and live WebSocket that
+    `start()` adds.
+  - Afterwards it sets `AgentOwner` on the project's instances directly under a service
+    and posts the result.
+- **`config/supervisor/studio-sync-plugin-service.sh`** copies the plugin into Studio's
+  local Plugins folder once per boot, or removes it. It waits for a fresh install's first
+  launch to create the folder. `STUDIO_SYNC_PLUGIN` is on only in the code-docker
+  overlay; standalone there is no `code-docker:34880` to poll.
+- **The overlay** mounts `config/studio-sync` into code-docker at
+  `/usr/local/lib/studio-sync`, plus `launcher.sh` at `/usr/local/bin/studio-sync`. The
+  directory mount is what lets a `git pull` reach a running code-docker; a file bind mount
+  keeps the replaced inode.
+
+**Why Rojo's CLI is not forked.** Projects pin `rojo` with mise; a forked server would
+stop being the version a project pins, and its CLI would drift from upstream. The plugin
+side only has to match Rojo's **protocol**, which has changed once in five years:
+
+| Rojo | Protocol |
+|---|---|
+| 7.0 to 7.6 | 4 |
+| 7.7.0 and later | 5 (WebSocket transport) |
+
+So the pin is `ROJO_VERSION` in the Dockerfile. It moves only when a project needs a
+newer protocol, and moving it means re-running `build.sh` against the new tag (no patch
+to rebase).
+
+**Behaviour worth knowing:**
+
+- **Ownership.** A sync is refused (`refused: ServerScriptService.Server belongs to
+  agent-a`, exit 1) if anything it would hydrate or remove has a different `AgentOwner`
+  on it or an ancestor. This matches the shared-Studio MCP notice (`mcp-shared-notice.md`),
+  which also points agents at `studio-sync`. There is no release command yet; clearing
+  an owner means removing the attribute.
+- **Fixed ports, queued.** Concurrent runs queue on the reply port. The plugin watches
+  one port rather than a range because every probe of a closed port writes about 4
+  `HttpTraceError` lines to Studio's log. Measured on the test stack:
+  - 10 ports every 2 s: about 110 KB/min.
+  - 1 port: about 16 KB/min idle, roughly 23 MB a day.
+- **Place name.** Rojo renames the DataModel to the served project's name, here the
+  wrapper's request string. The plugin drops that one update.
+- **Restarting Studio.** Studio loads local plugins only at start. Replacing
+  `StudioSync.rbxm` under a running Studio does nothing until it restarts (measured: one
+  `loadPlugin` line in the log).
+- **Speed.** A sync takes 0.7 to 2.1 s, mostly the 2 s poll.
+
+**Verified on the test stack, 2026-10-06** (local `AgentTestPlace.rbxl`, Rojo 7.7.1
+pinned in the demo project's `mise.toml`):
+
+| Case | Result |
+|---|---|
+| First sync | +4 |
+| Unchanged re-sync | +0 ~0 -0 |
+| Edit plus new file | +1 ~1 |
+| Deleted file | -1 |
+| Other owner | refused |
+| Three concurrent runs | served in turn |
+| Nobody answering | timeout with a hint |
+| Plugin service on a recreated container | installs, and removes when switched off |
+
+**Side finding.** Studio writes plugin and script `print` output into its log file as
+`[FLog::CreatorOutput]` lines, in `~/.local/share/vinegar/appdata/Roblox/logs/`. That is
+a plugin-free way to show Studio's Output elsewhere, for example by tailing it into VS
+Code.
 
 ## Studio MCP bridge — built and verified end-to-end, 2026-08-13
 

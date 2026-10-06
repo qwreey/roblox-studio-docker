@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Sync a Rojo project into Roblox Studio once, then disconnect.
+
+Runs the project's own `rojo serve` (whatever version mise or PATH gives in the project
+directory) for the length of one sync, under a temporary wrapper project whose name
+carries the request. The StudioSync plugin in Studio finds it, claims it, runs Rojo's
+initial sync, and reports back here. Nothing in the repository is written.
+
+Every sync uses the same two ports, 34880 for `rojo serve` and 34881 for the reply, so
+the plugin only has to watch one port (each probe of a closed port adds a few lines to
+Studio's log). Concurrent runs queue on the reply port: whoever binds it goes next.
+Both are in the range studio-front forwards from Studio (STUDIO_CODE_DOCKER_PORTS);
+34872-34879 stay free for ordinary `rojo serve`.
+
+Instances the sync owns get an AgentOwner attribute; a sync that would change another
+owner's instances is refused.
+"""
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+SERVE_PORT, REPLY_PORT = 34880, 34881
+
+
+def default_owner(project_dir):
+    owner = os.environ.get("STUDIO_SYNC_OWNER")
+    if not owner:
+        # symbolic-ref, not rev-parse: it also names a branch with no commits yet.
+        branch = subprocess.run(
+            ["git", "-C", project_dir, "symbolic-ref", "--quiet", "--short", "HEAD"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        owner = branch or os.path.basename(project_dir)
+    return re.sub(r"[^\w./-]", "-", owner)
+
+
+def take_turn(handler, seconds):
+    """Binds the reply port, waiting while another studio-sync holds it."""
+    deadline = time.monotonic() + seconds
+    waiting = False
+    while True:
+        try:
+            return ThreadingHTTPServer(("0.0.0.0", REPLY_PORT), handler)
+        except OSError:
+            if time.monotonic() > deadline:
+                sys.exit(f"studio-sync: port {REPLY_PORT} stayed busy for {seconds:g}s - another studio-sync "
+                         "still running, or something else is using it")
+            if not waiting:
+                print("studio-sync: another sync is running, waiting for it to finish...", file=sys.stderr)
+                waiting = True
+            time.sleep(0.5)
+
+
+def rojo_command():
+    if os.environ.get("ROJO"):
+        return [os.environ["ROJO"]]
+    if shutil.which("rojo"):
+        return ["rojo"]
+    if shutil.which("mise"):
+        return ["mise", "exec", "--", "rojo"]
+    sys.exit("studio-sync: no rojo on PATH (and no mise to find one)")
+
+
+class Reply:
+    def __init__(self):
+        self.claimed_by = None
+        self.result = None
+        self.done = threading.Event()
+
+
+def make_handler(reply):
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if self.path == "/claim":
+                if reply.claimed_by is None:
+                    reply.claimed_by = body.get("place", "?")
+                    self.send_response(200)
+                else:
+                    self.send_response(409)
+            elif self.path == "/result":
+                reply.result = body
+                reply.done.set()
+                self.send_response(200)
+            else:
+                self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    return Handler
+
+
+def wait_for_server(port, process, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return False
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/rojo", timeout=1)
+            return True
+        except OSError:
+            time.sleep(0.2)
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("project", nargs="?", default="default.project.json",
+                        help="Rojo project file (default: default.project.json)")
+    parser.add_argument("--owner", help="AgentOwner name (default: $STUDIO_SYNC_OWNER, else the git branch)")
+    parser.add_argument("--timeout", type=float, default=60, help="seconds to wait for Studio (default 60)")
+    parser.add_argument("--json", action="store_true", help="print the plugin's result as JSON")
+    args = parser.parse_args()
+
+    project = os.path.abspath(args.project)
+    if not os.path.isfile(project):
+        sys.exit(f"studio-sync: no project file at {project}")
+    project_dir = os.path.dirname(project)
+    owner = re.sub(r"[^\w./-]", "-", args.owner) if args.owner else default_owner(project_dir)
+
+    reply = Reply()
+    server = take_turn(make_handler(reply), args.timeout)
+    serve_port, reply_port = SERVE_PORT, REPLY_PORT
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    work = tempfile.mkdtemp(prefix="studio-sync-")
+    wrapper = os.path.join(work, "studio-sync.project.json")
+    with open(wrapper, "w") as f:
+        json.dump({"name": f"studio-sync owner={owner} reply={reply_port}", "tree": {"$path": project}}, f)
+
+    log = open(os.path.join(work, "rojo.log"), "w+")
+    rojo = subprocess.Popen(
+        rojo_command() + ["serve", wrapper, "--address", "0.0.0.0", "--port", str(serve_port)],
+        cwd=project_dir, stdout=log, stderr=subprocess.STDOUT,
+    )
+    try:
+        if not wait_for_server(serve_port, rojo, 30):
+            log.seek(0)
+            sys.exit(f"studio-sync: rojo serve didn't come up:\n{log.read().strip()}")
+        print(f"studio-sync: serving {os.path.relpath(project)} as {owner} on :{serve_port}, waiting for Studio...",
+              file=sys.stderr)
+        if not reply.done.wait(args.timeout):
+            if reply.claimed_by is None:
+                sys.exit(f"studio-sync: no Studio picked this up within {args.timeout:g}s - is Studio running with "
+                         "a place open and the StudioSync plugin installed (and its HTTP permission allowed)?")
+            sys.exit(f"studio-sync: {reply.claimed_by} claimed the sync but didn't finish within {args.timeout:g}s")
+    finally:
+        rojo.terminate()
+        try:
+            rojo.wait(5)
+        except subprocess.TimeoutExpired:
+            rojo.kill()
+        server.shutdown()
+        shutil.rmtree(work, ignore_errors=True)
+
+    result = reply.result
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif result.get("ok"):
+        unapplied = result.get("unapplied") or 0
+        print(f"synced into {result.get('place')} as {owner}: "
+              f"+{result.get('added', 0)} ~{result.get('updated', 0)} -{result.get('removed', 0)}"
+              + (f", {unapplied} change(s) could not be applied" if unapplied else ""))
+        if result.get("owned"):
+            print("owned: " + ", ".join(result["owned"]))
+    else:
+        print(f"studio-sync: {result.get('error', 'failed')}", file=sys.stderr)
+    return 0 if result.get("ok") else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

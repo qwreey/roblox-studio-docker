@@ -50,6 +50,10 @@ services:
       # 같은 모양 - 여러 VNC 대상이 한 router에 붙을 때 어느 것인지 이름만으로
       # 알 수 있게(예전 이름 vnc-only는 대상이 하나뿐이라고 가정한 이름이었다).
       VNC_BIND_ALIAS: roblox-studio-vnc
+      # studio-sync의 Studio 쪽 플러그인을 Studio Plugins 폴더에 넣는다(끄면 빼낸다).
+      # 플러그인이 code-docker:34880을 찾기 때문에 code-docker와 붙을 때만 의미가 있어서
+      # 단독 실행 기본값은 off - config/supervisor/studio-sync-plugin-service.sh 참고.
+      STUDIO_SYNC_PLUGIN: "${STUDIO_SYNC_PLUGIN:-true}"
     networks:
       # code-docker-internal에는 붙지 않는다. 플러그인이나 스크립트가 HttpService로
       # 임의 요청을 보낼 수 있는 컨테이너라, 거기 붙으면 code-docker의 nginx(로그인 없는
@@ -107,6 +111,13 @@ services:
   code-docker:
     environment:
       MCP_TOKEN: "${MCP_TOKEN:-}"
+    # studio-sync CLI(config/studio-sync/studio-sync). code-docker는 이 레포를 모르므로
+    # 오버레이가 넘겨준다. 디렉터리는 통째로, 실행 파일 자리에는 그걸 부르는 고정
+    # 런처만 마운트한다 - 파일 하나를 bind mount하면 git pull이 파일을 새로 쓴 뒤에도
+    # 컨테이너는 옛 파일을 계속 본다(재생성 전까지).
+    volumes:
+      - "./config/studio-sync:/usr/local/lib/studio-sync:ro"
+      - "./config/studio-sync/launcher.sh:/usr/local/bin/studio-sync:ro"
 
   # code-docker 쪽에 이미 정의된 서비스에 필드만 추가 병합 (include 병합은 서비스
   # 이름 기준으로 동작 - "이 파일에서 정의한 서비스만" 이라는 제약 없음, code-docker
@@ -139,8 +150,8 @@ services:
       # 있어서 맨 이름은 자기 자신으로 풀릴 수 있다.
       STUDIO_UPSTREAM: "${PREFIX:-}roblox-studio.${PREFIX:-}roblox-studio-net"
       CODE_DOCKER_UPSTREAM: "${PREFIX:-}code-docker.${PREFIX:-}code-docker-internal"
-      # Studio가 code-docker 쪽으로 열 수 있는 포트. 기본값은 rojo serve 10개(에이전트마다
-      # 하나씩 띄울 수 있게)와 luau-lsp Studio 플러그인 포트.
+      # Studio가 code-docker 쪽으로 열 수 있는 포트. 기본값은 일반 rojo serve용 34872-34879,
+      # studio-sync용 34880(serve)·34881(회신), luau-lsp Studio 플러그인 3667.
       STUDIO_CODE_DOCKER_PORTS: "${STUDIO_CODE_DOCKER_PORTS:-34872-34881 3667}"
     volumes:
       - "./config/studio-front:/studio-front:ro"
