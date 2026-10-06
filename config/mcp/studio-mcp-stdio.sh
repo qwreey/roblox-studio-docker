@@ -38,4 +38,5 @@ if [[ -z "${STUDIO_MCP_EXE}" ]]; then
   exit 1
 fi
 
-exec "${WINE_BIN}" "${STUDIO_MCP_EXE}"
+# Through mcp-shared-notice.py, which tells clients the Studio is shared between agents.
+exec python3 /usr/local/bin/mcp-shared-notice.py "${WINE_BIN}" "${STUDIO_MCP_EXE}"

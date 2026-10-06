@@ -1117,6 +1117,20 @@ touching again:
   logged immediately on startup is just that self-connect racing its own listener binding
   and retrying ~1.4s later, not a real failure.
 
+**Shared-Studio notice (2026-10-06).** Several agents can use one Studio through the
+bridge at once, and Studio's MCP doesn't say so. `studio-mcp-stdio.sh` runs StudioMCP.exe
+under `mcp-shared-notice.py`, which appends `mcp-shared-notice.md` to the `instructions`
+field of the `initialize` response. The note's convention is an `AgentOwner` attribute on
+each agent's own root, and the agent checks it before touching an instance. Every other
+message passes through unchanged.
+
+- **Why an attribute:** it lives in the place and is visible to every agent and to MCP
+  tools. Writing it into a Rojo `project.json` was rejected: that file is the real,
+  public project.
+- **Verified:** with a fake server, and through a real `supergateway --stateful`, which
+  forwards the child's `initialize` response rather than writing its own. Not yet
+  verified against StudioMCP.exe itself.
+
 ## Process supervision: switched to `supervisord` — 2026-08-13
 
 `entrypoint.sh` used to hand-supervise everything itself: background labwc/wayvnc/dbus,
