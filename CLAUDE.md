@@ -1342,8 +1342,14 @@ to rebase).
 - **Ownership.** A sync is refused (`refused: ServerScriptService.Server belongs to
   agent-a`, exit 1) if anything it would hydrate or remove has a different `AgentOwner`
   on it or an ancestor. This matches the shared-Studio MCP notice (`mcp-shared-notice.md`),
-  which also points agents at `studio-sync`. There is no release command yet; clearing
-  an owner means removing the attribute.
+  which also points agents at `studio-sync`.
+- **`studio-sync --release [--owner X]`** clears that owner's `AgentOwner` marks
+  everywhere in the open place. The instances themselves stay.
+  - No Rojo is involved. The CLI answers `/api/rojo` on 34880 itself, with a one-entry
+    msgpack map whose `projectName` is `studio-sync release owner=X reply=34881`.
+  - It queues on the reply port like a sync.
+  - Verified: after agent-a released, agent-b's sync onto the same paths went through
+    (`+0 ~0 -0`, now owned by agent-b).
 - **Fixed ports, queued.** Concurrent runs queue on the reply port. The plugin watches
   one port rather than a range because every probe of a closed port writes about 4
   `HttpTraceError` lines to Studio's log. Measured on the test stack:

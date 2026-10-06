@@ -359,6 +359,7 @@ inside code-docker:
 ```sh
 studio-sync                     # default.project.json, owner = the git branch
 studio-sync path/to/x.project.json --owner my-task --json
+studio-sync --release           # clear this owner's AgentOwner marks (instances stay)
 ```
 
 - It runs the project's own `rojo serve` for one sync and stops it again. That is the

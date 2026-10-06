@@ -13,7 +13,8 @@ Both are in the range studio-front forwards from Studio (STUDIO_CODE_DOCKER_PORT
 34872-34879 stay free for ordinary `rojo serve`.
 
 Instances the sync owns get an AgentOwner attribute; a sync that would change another
-owner's instances is refused.
+owner's instances is refused. `--release` clears an owner's AgentOwner marks everywhere in
+the open place (the instances stay); it needs no project or Rojo.
 """
 import argparse
 import json
@@ -123,6 +124,79 @@ def wait_for_server(port, process, seconds):
     return None
 
 
+def release_info(name):
+    """/api/rojo's answer for a release request, in msgpack like Rojo 7.7's: a one-entry
+    map {projectName: name}, which is all the plugin reads before claiming."""
+    data = name.encode()
+    key = b"projectName"
+    if len(data) < 32:
+        value = bytes([0xa0 | len(data)]) + data
+    elif len(data) < 256:
+        value = bytes([0xd9, len(data)]) + data
+    else:
+        value = b"\xda" + len(data).to_bytes(2, "big") + data
+    return b"\x81" + bytes([0xa0 | len(key)]) + key + value
+
+
+def serve_release_request(name):
+    body = release_info(name)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != "/api/rojo":
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/msgpack")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    try:
+        server = ThreadingHTTPServer(("0.0.0.0", SERVE_PORT), Handler)
+    except OSError:
+        sys.exit(f"studio-sync: port {SERVE_PORT} is taken by something other than studio-sync")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def wait_for_reply(reply, seconds, what):
+    if reply.done.wait(seconds):
+        return
+    if reply.claimed_by is None:
+        sys.exit(f"studio-sync: no Studio picked this up within {seconds:g}s - is Studio running with "
+                 "a place open and the StudioSync plugin installed (and its HTTP permission allowed)?")
+    sys.exit(f"studio-sync: {reply.claimed_by} claimed the {what} but didn't finish within {seconds:g}s")
+
+
+def release(owner, args):
+    reply = Reply()
+    server = take_turn(make_handler(reply), args.timeout)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = serve_release_request(f"studio-sync release owner={owner} reply={REPLY_PORT}")
+    try:
+        print(f"studio-sync: releasing what {owner} owns, waiting for Studio...", file=sys.stderr)
+        wait_for_reply(reply, args.timeout, "release")
+    finally:
+        request.shutdown()
+        server.shutdown()
+
+    result = reply.result
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif result.get("ok"):
+        released = result.get("released") or []
+        print(f"released {len(released)} instance(s) owned by {owner} in {result.get('place')}"
+              + (": " + ", ".join(released) if released else ""))
+    else:
+        print(f"studio-sync: {result.get('error', 'failed')}", file=sys.stderr)
+    return 0 if result.get("ok") else 1
+
+
 def protocol_problem(info):
     """Why the plugin can't sync from this server, or None. Rojo up to 7.6 answers in
     JSON with protocol 4; from 7.7 in msgpack, where protocolVersion is a fixstr key
@@ -159,7 +233,12 @@ def main():
     parser.add_argument("--owner", help="AgentOwner name (default: $STUDIO_SYNC_OWNER, else the git branch)")
     parser.add_argument("--timeout", type=float, default=60, help="seconds to wait for Studio (default 60)")
     parser.add_argument("--json", action="store_true", help="print the plugin's result as JSON")
+    parser.add_argument("--release", action="store_true",
+                        help="clear this owner's AgentOwner marks in Studio instead of syncing")
     args = parser.parse_args()
+
+    if args.release:
+        return release(clean_owner(args.owner) if args.owner else default_owner(os.getcwd()), args)
 
     project = os.path.abspath(args.project)
     if not os.path.isfile(project):
@@ -192,11 +271,7 @@ def main():
             sys.exit(f"studio-sync: {problem}")
         print(f"studio-sync: serving {os.path.relpath(project)} as {owner} on :{SERVE_PORT}, waiting for Studio...",
               file=sys.stderr)
-        if not reply.done.wait(args.timeout):
-            if reply.claimed_by is None:
-                sys.exit(f"studio-sync: no Studio picked this up within {args.timeout:g}s - is Studio running with "
-                         "a place open and the StudioSync plugin installed (and its HTTP permission allowed)?")
-            sys.exit(f"studio-sync: {reply.claimed_by} claimed the sync but didn't finish within {args.timeout:g}s")
+        wait_for_reply(reply, args.timeout, "sync")
     finally:
         rojo.terminate()
         try:

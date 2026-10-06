@@ -13,6 +13,9 @@
 	3. sets AgentOwner on the project's top-level instances under each service,
 	4. reports the result to the reply port and forgets the session.
 
+	A `studio-sync release owner=<name>` request (`studio-sync --release`, no Rojo behind
+	it) instead clears AgentOwner wherever it names that owner.
+
 	A person's ordinary `rojo serve` is never touched: its project name doesn't match.
 ]]
 
@@ -41,6 +44,8 @@ local POLL_SECONDS = 2
 local OWNER_ATTRIBUTE = "AgentOwner"
 -- Matches what the CLI lets through (ASCII letters, digits, . _ / -).
 local REQUEST_PATTERN = "^studio%-sync owner=([%w%._/%-]+) reply=(%d+)$"
+-- `studio-sync --release`: no Rojo involved, the CLI answers /api/rojo itself.
+local RELEASE_PATTERN = "^studio%-sync release owner=([%w%._/%-]+) reply=(%d+)$"
 -- Engine-made containers that sit between a service and a project's own instances: the
 -- project's instances inside them are what gets an owner, never the shared container.
 local SHARED_CONTAINERS = { StarterPlayerScripts = true, StarterCharacterScripts = true }
@@ -185,20 +190,47 @@ local function readRequest(url)
 		return nil
 	end
 	local owner, replyPort = string.match(info.projectName, REQUEST_PATTERN)
-	if owner == nil then
-		return nil
+	if owner ~= nil then
+		return "sync", owner, tonumber(replyPort)
 	end
-	return owner, tonumber(replyPort)
+	owner, replyPort = string.match(info.projectName, RELEASE_PATTERN)
+	if owner ~= nil then
+		return "release", owner, tonumber(replyPort)
+	end
+	return nil
+end
+
+-- Clears AgentOwner wherever it names `owner`; the instances themselves stay.
+local function release(owner)
+	local released = {}
+	for _, instance in game:GetDescendants() do
+		local ok, value = pcall(instance.GetAttribute, instance, OWNER_ATTRIBUTE)
+		if ok and value == owner then
+			instance:SetAttribute(OWNER_ATTRIBUTE, nil)
+			table.insert(released, instance:GetFullName())
+		end
+	end
+	table.sort(released)
+	return released
 end
 
 local function poll()
 	local url = `http://{HOST}:{PORT}`
-	local owner, replyPort = readRequest(url)
-	if owner == nil then
+	local kind, owner, replyPort = readRequest(url)
+	if kind == nil then
 		return
 	end
 	local claimed, response = post(replyPort, "/claim", { place = game.Name })
 	if not (claimed and response.Success) then
+		return
+	end
+
+	if kind == "release" then
+		local ok, released = pcall(release, owner)
+		post(replyPort, "/result", if ok
+			then { ok = true, owner = owner, place = game.Name, released = released }
+			else { ok = false, owner = owner, error = tostring(released) })
+		print(`[studio-sync] released {if ok then #released else 0} instance(s) owned by {owner}`)
 		return
 	end
 
