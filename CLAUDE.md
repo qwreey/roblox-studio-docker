@@ -1065,20 +1065,24 @@ and `studio-front`.
   pass untouched:
   - code-docker → `studio:8787` (MCP; Caddy still checks the token). `studio` is
     `studio-front`'s alias on `code-docker-internal`.
-  - Studio → `code-docker:<STUDIO_CODE_DOCKER_PORTS>` (default `34872-34881 3667`:
-    34872-34879 for ordinary `rojo serve`, 34880-34881 for studio-sync, 3667 for
-    luau-lsp's Studio plugin). `code-docker` is `studio-front`'s alias
-    on `roblox-studio-net`, so plugin host settings keep saying `code-docker`. The
-    server on the code-docker side has to bind a non-loopback address
-    (`rojo serve --address 0.0.0.0`).
+  - Studio → `studio-front:<STUDIO_CODE_DOCKER_PORTS>` → code-docker (default
+    `34872-34881 3667`: 34872-34879 for ordinary `rojo serve`, 34880-34881 for
+    studio-sync, 3667 for luau-lsp's Studio plugin). Plugins in Studio are pointed at
+    host `studio-front`. The server on the code-docker side has to bind a non-loopback
+    address (`rojo serve --address 0.0.0.0`).
+  - **No `code-docker` alias on `roblox-studio-net`.** That would keep plugin host
+    settings unchanged, but router joins this network too. router's own upstreams say
+    `code-docker:80`, and Docker answers a multi-network container's lookup from only
+    one of its networks. So a bare `code-docker` there could resolve to studio-front,
+    which doesn't serve :80.
   - Upstreams are network-qualified (`<container>.<network>`, which Docker's DNS
-    answers), because a bare `studio`/`code-docker` could resolve to `studio-front`
-    itself.
+    answers), because a bare `studio` could resolve to `studio-front` itself.
 - **Measured on the test stack, from inside `studio`, 2026-10-06:**
   - `code-docker:80`, `:82`, and `router:80` were refused.
   - code-docker's and dind's `code-docker-internal` IPs timed out, because router drops
     the forward.
-  - A listener on `code-docker:34875` answered 200, and the internet was reachable.
+  - A listener on code-docker's :34875, reached through studio-front, answered 200, and
+    the internet was reachable.
   - From code-docker, `studio:8787` reached a test listener inside `studio`.
   - router still reached `roblox-studio-vnc:6080`.
 - **Chrome has the same problem.** code-docker-chrome's
@@ -1116,7 +1120,8 @@ owned: ReplicatedStorage.Shared, ServerScriptService.Server
   - It is Rojo's own plugin at the pinned release, unmodified, with
     `plugin/src/init.server.lua` (Rojo's UI entry point) replaced by
     `StudioSync.server.lua`.
-  - Every 2 s that script asks `code-docker:34880` for `/api/rojo`. When the project name
+  - Every 2 s that script asks `studio-front:34880` (code-docker's 34880, forwarded) for
+    `/api/rojo`. When the project name
     is a request, it claims it at the reply port (with several places open, one wins).
   - It then runs `ServeSession:__initialSync` only. That is Rojo's own hydrate, diff and
     reconcile, but without the status changes, place-id writes and live WebSocket that
@@ -1126,7 +1131,7 @@ owned: ReplicatedStorage.Shared, ServerScriptService.Server
 - **`config/supervisor/studio-sync-plugin-service.sh`** copies the plugin into Studio's
   local Plugins folder once per boot, or removes it. It waits for a fresh install's first
   launch to create the folder. `STUDIO_SYNC_PLUGIN` is on only in the code-docker
-  overlay; standalone there is no `code-docker:34880` to poll.
+  overlay; standalone there is no `studio-front` to poll.
 - **The overlay** mounts `config/studio-sync` into code-docker at
   `/usr/local/lib/studio-sync`, plus `launcher.sh` at `/usr/local/bin/studio-sync`. The
   directory mount is what lets a `git pull` reach a running code-docker; a file bind mount

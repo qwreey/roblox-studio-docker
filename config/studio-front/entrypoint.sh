@@ -6,8 +6,8 @@ set -eu
 # HttpService can't reach code-docker's nginx (code-server, webmanager) or dind's
 # unauthenticated API. This forwards exactly two kinds of traffic across:
 #
-#   code-docker -> studio:8787            Studio's MCP bridge (Caddy checks the token)
-#   studio -> code-docker:<STUDIO_CODE_DOCKER_PORTS>   rojo serve, luau-lsp, ...
+#   code-docker -> studio:8787                 Studio's MCP bridge (Caddy checks the token)
+#   studio -> studio-front:<STUDIO_CODE_DOCKER_PORTS> -> code-docker   rojo serve, luau-lsp, ...
 #
 # Each listener is reachable from both networks, which grants nothing: from
 # code-docker-internal, :34872 is code-docker's own port; from roblox-studio-net, :8787
@@ -15,7 +15,7 @@ set -eu
 #
 # Plain TCP (nginx stream), so HTTP and WebSocket both pass untouched. Upstreams are
 # network-qualified (<container>.<network>) because this container answers to "studio"
-# and "code-docker" itself - a bare name could resolve back to it.
+# itself - a bare name could resolve back to it.
 
 : "${STUDIO_UPSTREAM:?}" "${CODE_DOCKER_UPSTREAM:?}"
 PORTS="${STUDIO_CODE_DOCKER_PORTS:-34872-34881 3667}"
@@ -58,6 +58,10 @@ stream {
     }
 
     server {
+        # studio-sync's plugin probes studio-front:34880 every 2 s, which is usually closed;
+        # at the default level each probe logs a connect() failure, and within a day the
+        # log rotates away the startup line that lists the forwarded ports.
+        error_log /dev/stderr crit;
 ${listens}        set \$upstream ${CODE_DOCKER_UPSTREAM}:\$server_port;
         proxy_pass \$upstream;
     }

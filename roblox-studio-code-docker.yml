@@ -51,7 +51,7 @@ services:
       # 알 수 있게(예전 이름 vnc-only는 대상이 하나뿐이라고 가정한 이름이었다).
       VNC_BIND_ALIAS: roblox-studio-vnc
       # studio-sync의 Studio 쪽 플러그인을 Studio Plugins 폴더에 넣는다(끄면 빼낸다).
-      # 플러그인이 code-docker:34880을 찾기 때문에 code-docker와 붙을 때만 의미가 있어서
+      # 플러그인이 studio-front:34880을 찾기 때문에 code-docker와 붙을 때만 의미가 있어서
       # 단독 실행 기본값은 off - config/supervisor/studio-sync-plugin-service.sh 참고.
       STUDIO_SYNC_PLUGIN: "${STUDIO_SYNC_PLUGIN:-true}"
     networks:
@@ -164,10 +164,10 @@ services:
       code-docker-internal:
         aliases:
           - studio
-      # Studio 쪽 Rojo/luau-lsp 플러그인 설정의 호스트명(code-docker)이 그대로 통한다.
-      roblox-studio-net:
-        aliases:
-          - code-docker
+      # Studio는 이 컨테이너를 제 이름 studio-front로 부른다(Rojo/luau-lsp 플러그인의 호스트
+      # 설정도 studio-front). code-docker라는 별칭을 주지 않는 이유: router도 이 망에
+      # 붙어 있어서, router가 code-docker:80을 찾을 때 이 컨테이너로 풀릴 수 있다.
+      roblox-studio-net: {}
     logging:
       driver: "json-file"
       options:

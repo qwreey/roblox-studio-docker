@@ -2,7 +2,7 @@
 	studio-sync: one-shot Rojo syncs requested from outside Studio.
 
 	Built into a plugin next to an unmodified copy of Rojo's own plugin modules (see
-	build.sh); this script replaces Rojo's UI entry point. It polls one port on code-docker
+	build.sh); this script replaces Rojo's UI entry point. It polls one port on code-docker (through studio-front)
 	for a `rojo serve` whose project name is a studio-sync request
 	(`studio-sync owner=<name> reply=<port>`, written by the studio-sync CLI), then:
 
@@ -28,16 +28,22 @@ if not RunService:IsEdit() then
 end
 
 local Rojo = script:FindFirstAncestor("Rojo")
+local Http = require(Rojo.Packages.Http)
 local ApiContext = require(Rojo.Plugin.ApiContext)
 local ServeSession = require(Rojo.Plugin.ServeSession)
 
-local HOST = "code-docker"
+-- code-docker as seen from Studio's network: studio-front forwards these ports to it.
+local HOST = "studio-front"
 -- studio-sync's fixed serve port. One port, not a range: every probe of a closed port
 -- costs a few lines in Studio's log, and concurrent syncs queue on the CLI side anyway.
 local PORT = 34880
 local POLL_SECONDS = 2
 local OWNER_ATTRIBUTE = "AgentOwner"
+-- Matches what the CLI lets through (ASCII letters, digits, . _ / -).
 local REQUEST_PATTERN = "^studio%-sync owner=([%w%._/%-]+) reply=(%d+)$"
+-- Engine-made containers that sit between a service and a project's own instances: the
+-- project's instances inside them are what gets an owner, never the shared container.
+local SHARED_CONTAINERS = { StarterPlayerScripts = true, StarterCharacterScripts = true }
 
 local function post(port, path, body)
 	return pcall(function()
@@ -118,7 +124,9 @@ local function stampOwner(instanceMap, owner)
 	local roots = {}
 	for instance in instanceMap.fromInstances do
 		local parent = instance.Parent
-		if parent ~= nil and parent.Parent == game then
+		local underService = parent ~= nil and parent.Parent == game
+		local underSharedContainer = parent ~= nil and SHARED_CONTAINERS[parent.ClassName] == true
+		if (underService or underSharedContainer) and not SHARED_CONTAINERS[instance.ClassName] then
 			instance:SetAttribute(OWNER_ATTRIBUTE, owner)
 			table.insert(roots, instance:GetFullName())
 		end
@@ -163,26 +171,45 @@ local function syncOnce(apiContext, serverInfo, owner, replyPort)
 	print(`[studio-sync] {serverInfo.projectName}: {if result.ok then "synced" else result.error}`)
 end
 
-local busy = false
+-- The request is read from /api/rojo directly rather than through ApiContext:connect(),
+-- which rejects a server on another protocol or one whose servePlaceIds exclude this
+-- place without saying which project it was - the CLI would only see a timeout. Here the
+-- request is claimed first and connect()'s refusal is reported back as the result.
+local function readRequest(url)
+	local ok, info = Http.get(url .. "/api/rojo")
+		:andThen(function(response)
+			return response:msgpack()
+		end)
+		:await()
+	if not ok or type(info) ~= "table" or type(info.projectName) ~= "string" then
+		return nil
+	end
+	local owner, replyPort = string.match(info.projectName, REQUEST_PATTERN)
+	if owner == nil then
+		return nil
+	end
+	return owner, tonumber(replyPort)
+end
 
 local function poll()
-	if busy then
+	local url = `http://{HOST}:{PORT}`
+	local owner, replyPort = readRequest(url)
+	if owner == nil then
 		return
 	end
-	local apiContext = ApiContext.new(`http://{HOST}:{PORT}`)
-	local ok, serverInfo = apiContext:connect():await()
-	if ok and type(serverInfo.projectName) == "string" then
-		local owner, replyPort = string.match(serverInfo.projectName, REQUEST_PATTERN)
-		if owner then
-			local claimed, response = post(tonumber(replyPort), "/claim", { place = game.Name })
-			if claimed and response.Success then
-				busy = true
-				local success, err = pcall(syncOnce, apiContext, serverInfo, owner, tonumber(replyPort))
-				busy = false
-				if not success then
-					post(tonumber(replyPort), "/result", { ok = false, owner = owner, error = tostring(err) })
-				end
-			end
+	local claimed, response = post(replyPort, "/claim", { place = game.Name })
+	if not (claimed and response.Success) then
+		return
+	end
+
+	local apiContext = ApiContext.new(url)
+	local connected, serverInfo = apiContext:connect():await()
+	if not connected then
+		post(replyPort, "/result", { ok = false, owner = owner, error = tostring(serverInfo) })
+	else
+		local success, err = pcall(syncOnce, apiContext, serverInfo, owner, replyPort)
+		if not success then
+			post(replyPort, "/result", { ok = false, owner = owner, error = tostring(err) })
 		end
 	end
 	apiContext:disconnect()

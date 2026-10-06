@@ -29,6 +29,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SERVE_PORT, REPLY_PORT = 34880, 34881
+# The Rojo protocol of the plugin built into the image (Dockerfile's ROJO_VERSION).
+PLUGIN_PROTOCOL = 5
 
 
 def default_owner(project_dir):
@@ -40,7 +42,13 @@ def default_owner(project_dir):
             capture_output=True, text=True,
         ).stdout.strip()
         owner = branch or os.path.basename(project_dir)
-    return re.sub(r"[^\w./-]", "-", owner)
+    return clean_owner(owner)
+
+
+def clean_owner(owner):
+    # ASCII only: the plugin's Lua pattern ([%w%._/%-]) knows nothing else, and an owner
+    # it can't parse is a request it never answers.
+    return re.sub(r"[^\w./-]", "-", owner, flags=re.ASCII)
 
 
 def take_turn(handler, seconds):
@@ -102,16 +110,46 @@ def make_handler(reply):
 
 
 def wait_for_server(port, process, seconds):
+    """Returns /api/rojo's body once `rojo serve` answers, None if it never does."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            return False
+            return None
         try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/rojo", timeout=1)
-            return True
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/rojo", timeout=1) as response:
+                return response.read()
         except OSError:
             time.sleep(0.2)
-    return False
+    return None
+
+
+def protocol_problem(info):
+    """Why the plugin can't sync from this server, or None. Rojo up to 7.6 answers in
+    JSON with protocol 4; from 7.7 in msgpack, where protocolVersion is a fixstr key
+    followed by a fixint."""
+    try:
+        version = json.loads(info).get("protocolVersion")
+    except ValueError:
+        marker = b"\xafprotocolVersion"
+        at = info.find(marker)
+        version = info[at + len(marker)] if at >= 0 and at + len(marker) < len(info) else None
+    if version == PLUGIN_PROTOCOL:
+        return None
+    return (f"this project's rojo speaks Rojo protocol {version}, and the StudioSync plugin speaks "
+            f"{PLUGIN_PROTOCOL} (Rojo 7.7 or later) - pin a newer rojo in the project")
+
+
+def place_restrictions(project):
+    """servePlaceIds/blockedPlaceIds from the real project. Rojo reads them only from the
+    project it serves, which is the wrapper, so they have to be copied over."""
+    try:
+        with open(project) as f:
+            real = json.load(f)
+    except (OSError, ValueError):
+        print("studio-sync: couldn't read the project as plain JSON; any servePlaceIds in it "
+              "are not enforced", file=sys.stderr)
+        return {}
+    return {key: real[key] for key in ("servePlaceIds", "blockedPlaceIds") if key in real}
 
 
 def main():
@@ -127,28 +165,32 @@ def main():
     if not os.path.isfile(project):
         sys.exit(f"studio-sync: no project file at {project}")
     project_dir = os.path.dirname(project)
-    owner = re.sub(r"[^\w./-]", "-", args.owner) if args.owner else default_owner(project_dir)
+    owner = clean_owner(args.owner) if args.owner else default_owner(project_dir)
 
     reply = Reply()
     server = take_turn(make_handler(reply), args.timeout)
-    serve_port, reply_port = SERVE_PORT, REPLY_PORT
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     work = tempfile.mkdtemp(prefix="studio-sync-")
     wrapper = os.path.join(work, "studio-sync.project.json")
     with open(wrapper, "w") as f:
-        json.dump({"name": f"studio-sync owner={owner} reply={reply_port}", "tree": {"$path": project}}, f)
+        json.dump({"name": f"studio-sync owner={owner} reply={REPLY_PORT}", "tree": {"$path": project},
+                   **place_restrictions(project)}, f)
 
     log = open(os.path.join(work, "rojo.log"), "w+")
     rojo = subprocess.Popen(
-        rojo_command() + ["serve", wrapper, "--address", "0.0.0.0", "--port", str(serve_port)],
+        rojo_command() + ["serve", wrapper, "--address", "0.0.0.0", "--port", str(SERVE_PORT)],
         cwd=project_dir, stdout=log, stderr=subprocess.STDOUT,
     )
     try:
-        if not wait_for_server(serve_port, rojo, 30):
+        info = wait_for_server(SERVE_PORT, rojo, 30)
+        if info is None:
             log.seek(0)
             sys.exit(f"studio-sync: rojo serve didn't come up:\n{log.read().strip()}")
-        print(f"studio-sync: serving {os.path.relpath(project)} as {owner} on :{serve_port}, waiting for Studio...",
+        problem = protocol_problem(info)
+        if problem:
+            sys.exit(f"studio-sync: {problem}")
+        print(f"studio-sync: serving {os.path.relpath(project)} as {owner} on :{SERVE_PORT}, waiting for Studio...",
               file=sys.stderr)
         if not reply.done.wait(args.timeout):
             if reply.claimed_by is None:

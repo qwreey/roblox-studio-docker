@@ -367,7 +367,8 @@ studio-sync path/to/x.project.json --owner my-task --json
 - Needs Studio running with a place open. The plugin is installed on boot, and Studio
   loads it the next time it starts.
 - Ports 34880-34881 are reserved for it. Ordinary `rojo serve` for live sync still works
-  on 34872-34879; bind it with `--address 0.0.0.0`.
+  on 34872-34879: bind it with `--address 0.0.0.0`, and set Rojo's plugin host in Studio
+  to `studio-front`, which forwards to code-docker.
 - How it works and what was measured: CLAUDE.md's "studio-sync".
 
 ## If something breaks
