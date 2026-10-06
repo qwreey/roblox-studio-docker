@@ -68,7 +68,9 @@ Docker Compose, self-contained, is the whole point.
      `winewayland.drv` and rootless XWayland both lack pointer-lock/cursor-constraint
      support (open upstream issues: `vinegarhq/vinegar#950`, `#805`, `#263`) — usable for
      scripted/MCP/Rojo workflows, not for manually orbiting the 3D viewport. Revisit if
-     upstream ever lands a fix for either of those issues.
+     upstream ever lands a fix for either of those issues. (Since 2026-10-05 Studio runs
+     on winex11 inside a Wine virtual desktop instead, and rotation works there — see
+     "Panels: Wine virtual desktop".)
 2. **Read `plan.md`** — the concrete build-out plan (directory layout, milestones,
    smoke-test order) derived from the synthesis **as amended by the Wayland pivot
    above** — plan.md's own "Resolved decisions" section has the full record. This is
@@ -179,11 +181,12 @@ for each is now in the actual image/compose config (not something done ad hoc in
 that will be lost on rebuild). If Studio's login breaks again after a rebuild, suspect one
 of these six having been silently reverted before re-investigating from scratch.
 
-**Still-unverified, expected-broken item**: edit-mode camera rotation (the Wayland/
-XWayland pointer-lock limitation accepted back in the Milestone 1/2 pivot). Not yet
-actually tested inside a real place/experience — only the dashboard has been confirmed
-so far. Worth a real check next time the container's up, but this is the *expected*,
-already-accepted failure mode, not a new bug to chase.
+**Edit-mode camera rotation works** under the current setup (winex11 through XWayland,
+inside a Wine virtual desktop — see "Panels: Wine virtual desktop"): a right-drag in an
+open place's viewport turned the camera, measured over VNC 2026-10-05. The pointer-lock
+limitation the Milestone 1/2 pivot accepted was about `winewayland.drv`, which Studio no
+longer runs on. Not measured: whether the rotation speed feels right through a VNC
+client's absolute pointer.
 
 **Confirmed as a bonus**: login state itself persists correctly across container
 restarts — a later full rebuild + `docker compose down/up` cycle came back up already
@@ -220,8 +223,9 @@ Concrete differences from the sway setup documented elsewhere in this file:
   during the sway era) need `wayland-0` instead now.
 - The headless output is still named **`HEADLESS-1`** (this is `wlroots`' own headless
   backend, not compositor-specific — unchanged), but labwc doesn't have sway's simple
-  `output * resolution ...` config directive to size it. `entrypoint.sh` now runs
-  `wlr-randr --output HEADLESS-1 --custom-mode 1920x1080` after labwc starts — note
+  `output * resolution ...` config directive to size it. `labwc-service.sh` runs
+  `wlr-randr --output HEADLESS-1 --custom-mode "$DESKTOP_RESOLUTION"` after labwc starts
+  (the starting size — VNC clients resize it later, see "Panels: Wine virtual desktop") — note
   **`--custom-mode`, not `--mode`**: the headless backend only pre-registers a default
   1280x720 mode with no fixed EDID mode list to pick from, so `--mode` (select from
   existing modes) fails with "unknown mode" where `--custom-mode` (define a new one)
@@ -325,6 +329,111 @@ indistinguishable once both labels were legible).
 the old image's `/etc/xdg/labwc/*`. (For a quick check without a rebuild, bind-mount
 `config/wm/labwc-rc.xml` over `/etc/xdg/labwc/rc.xml` and `pkill -HUP -x labwc` — labwc
 re-reads its config on SIGHUP.)
+
+## Panels: Wine virtual desktop over XWayland — 2026-10-05
+
+Reported as: plugin windows can't be resized, and Studio's Qt panels can't be dragged out
+and docked back. Studio now runs on `winex11.drv` through labwc's XWayland, inside a Wine
+virtual desktop filling the screen above waybar. Each piece is load-bearing:
+
+- **Why not plain Wayland (`winewayland.drv`, what Studio ran on before)**: Wayland never
+  tells a client where its windows are, and only the compositor may move them. Qt's
+  docking decides where a dragged panel lands from the panel's global position, so a
+  torn-off panel was placed by labwc (centred), didn't follow the pointer, and never
+  showed a drop target. Not fixable from this side.
+- **Why not plain X11 windows either**: measured — a torn-off panel jumped to the
+  top-left corner and stayed there. Only the virtual desktop, where Wine itself manages
+  every Windows window like Windows does, made all three work: tear off (follows the
+  pointer), dock back (drop on another panel's title bar or a dock edge; dropping into
+  the middle of a panel's content doesn't dock), and resizing a floating panel by its
+  edge. `winewayland.drv` silently ignores `explorer /desktop=`, so the virtual desktop
+  needs winex11.
+- **Why winex11 never worked before: a Kombucha bug.** Kombucha's own patch
+  `0017-winex11-Don-t-hide-cursor-under-X11-sessions` does
+  `strcmp(getenv("XDG_SESSION_TYPE"), "wayland")` with no NULL check. Nothing here sets
+  `XDG_SESSION_TYPE`, so winex11 segfaulted during init (inside `__wine_unix_lib_init`,
+  right after `Display settings are now handled by: NoRes`), the loader logged only
+  `Initialization of L"winex11.drv" failed`, and Wine fell through to winewayland —
+  which is also why this used to look like "Kombucha prefers Wayland". Fixed by
+  `ENV XDG_SESSION_TYPE=wayland` in the Dockerfile. No registry `Graphics` key is needed:
+  Wine's default order already tries x11 first. Found by putting gdb on the spawned
+  `explorer.exe` (wrap `lib/wine/x86_64-unix/wine-preloader` in a script that `exec`s
+  gdb for `*explorer*` argv) — the fault's `rsi` pointed at the string `"wayland"` in
+  winex11.so's rodata. Report drafted, not filed:
+  `research/upstream-reports/kombucha-xdg-session-type.md`.
+- **Sized to the area above waybar, not the whole screen**: a virtual desktop exactly the
+  screen's size makes Wine go fullscreen (`is_desktop_fullscreen`), covering waybar. One
+  waybar-height shorter (`desktop-size.sh` reads the height from waybar's own config) stays
+  an ordinary window, which `labwc-rc.xml`'s window rule pins to the top-left with no
+  server-side titlebar.
+- **Wine only accepts a desktop size it lists.** `explorer /desktop=<uuid>,WxH` asks for
+  WxH, but the modes inside a virtual desktop are a fixed list of standard resolutions plus
+  the screen size plus HKCU `Software\Wine\Explorer\Desktops` `"Default"`; anything else
+  fails silently (`initialize_display_settings: Failed to set primary display settings`)
+  and the desktop stays at the screen size — fullscreen again. So that `"Default"` value is
+  kept equal to the desktop size (`set_wine_default_desktop_size`: `wine reg` while the
+  prefix's wineserver runs, an appended `user.reg` section otherwise).
+- **Following the VNC client's size.** Wine ignores window-manager resizes of the desktop
+  window (`winex11.drv/window.c`, "ignore window manager config changes in virtual desktop
+  mode"), so a resized `HEADLESS-1` (noVNC `resize=remote`, TigerVNC `SetDesktopSize`)
+  alone leaves Studio cropped. The `desktop-resize` program
+  (`desktop-resize-service.sh`) polls the output, waits for it to settle (a dragged
+  browser window sends a burst), updates `"Default"` and Vinegar's `virtual_desktop`, and
+  when Studio is up runs `desktop-resize.exe` (built from `config/desktop-resize/` in its
+  own Dockerfile stage) inside Studio's desktop. That tool's comments carry the three Wine
+  quirks it works around — maximized windows aren't refitted, the taskbar isn't taken out
+  of the new work area, and the desktop process resets the work area ~1s after the change
+  — each found by tracing the tray rect and work area step by step. ~2s per resize;
+  measured shrinking and growing with a place open (viewport kept rendering) and with a
+  five-step burst (only the last size applied). Measurement trap: starting *anything* with
+  `wine explorer /desktop=<existing name> <program>` resets that desktop's work area to the
+  whole desktop, so a work area read by a tool launched that way says nothing about what
+  Studio sees — desktop-resize.exe sets it last for exactly this reason.
+- **Floating panels kept above the main window** (`wine-owned-popups`, a small X client
+  run as its own supervisord program). A floating panel is a popup owned by Studio's main
+  window, which Windows keeps above its owner; upstream Wine doesn't inside a virtual
+  desktop. On focus, `winex11`'s `set_input_focus` raises the focused window's X window to
+  the top of the desktop's X children with no regard for what it owns, and the Expose that
+  follows makes the server move it above them in the win32 z-order too
+  (`X11DRV_Expose` → `update_window_zorder`) — never through `SetWindowPos`, so its
+  owned-popup handling never runs, and `SetWindowPos`/`BringWindowToTop` from outside
+  can't undo it. Reproduced with a bare Win32 owner+popup on upstream wine-11.15 as well as
+  Kombucha, so not Studio's doing. The daemon restacks any X window whose
+  `WM_TRANSIENT_FOR` (Wine sets it to the owner's X window) sits above it directly above
+  it again, and the resulting Expose fixes the win32 order the same way it broke it. Upstream
+  report drafted, not filed: `research/upstream-reports/wine-owned-popup-zorder.md`
+  (with a bare Win32 repro, `owned-popup-zorder-test.c`).
+- **How the setting reaches existing deployments**: Vinegar's `virtual_desktop` key.
+  `entrypoint.sh` adds it to `config.toml` once (marker
+  `~/.config/vinegar/.virtual-desktop-added`, so an owner who deletes the line keeps it
+  deleted — the first-run seeding never touches an existing file); `desktop-resize`
+  keeps a present, non-empty value in step with the screen from then on. A Studio
+  launched by `docker exec` needs `DISPLAY=:0`, or winex11 has no display and Wine falls
+  back to winewayland (SETUP.md's launch snippet carries it). `entrypoint.sh` also clears
+  stale `/tmp/.X*-lock` files, which `docker restart` keeps and which pushed XWayland to
+  `:1`, `:2`, ...
+
+Side effects worth knowing: the desktop covers the spot where labwc's right-click root
+menu opens (waybar's "☰ Menu" launcher reaches the same apps) and puts Kombucha's Windows-style taskbar at its own bottom
+edge, above waybar — that one lists Wine's windows, waybar only the desktop as a whole.
+Floating panels never show up on it (they're tool windows, which a taskbar doesn't list);
+the extra "RobloxStudio" entries it does show are some other Studio windows, unidentified,
+and clicking them did nothing in testing. It stays because it's the only clean way back to a
+minimized Studio. Turning it off would need a fixed desktop name (Kombucha defaults
+`EnableShell` on for any desktop without its own registry key, and Vinegar names each one
+with a fresh UUID), and was tried on a test desktop with `EnableShell=0`: a minimized window
+becomes a Win3.x-style title bar at the desktop's bottom-left that does restore, but the
+desktop doesn't repaint behind it — a black rectangle where its popup was, and the title
+bar left drawn after restoring. With the shell on, neither happens.
+"Plugins → Plugins Folder" opens Wine's own file browser inside the desktop.
+
+**File manager**: the Linux-side one is Thunar. Nautilus is pulled in by
+`xdg-desktop-portal-gnome` and refuses to run as root; the Dockerfile hides it from the
+launcher, removes its `org.freedesktop.FileManager1` D-Bus service (Thunar ships its
+own — two in one directory and activation picks either) and makes Thunar the
+`inode/directory` handler. Untested: xdg-desktop-portal-gnome implements FileChooser and
+its binary references `org.gnome.Nautilus`, so a GTK/Chromium file picker going through
+the portal may still fail as root. Nothing here was seen using one.
 
 ## Crash-loop bug: stale Wayland socket survives `docker restart` — fixed 2026-08-12
 
@@ -542,15 +651,19 @@ leave off), not because turning it on speeds anything up here. This closes out t
 *browser decoder* side is what blocks it — which is also why Selkies stays the real answer
 for latency-sensitive 3D interaction, not this flag.
 
-Related, same measurement session: **client-side resize already works end to end** with no
-change on this side. wayvnc 0.10.1 has automatic resizing on by default (`-R`/
-`--disable-resizing` is the opt-out), and connecting noVNC with `resize=remote` moved
-`HEADLESS-1` off 1920x1080 to the browser viewport's size and tracked later window
-resizes (`wlr-randr` confirmed). What was missing was purely on the *viewer* side —
-code-docker's router hardcoded `resize=scale` in the noVNC URL; that's now a per-target
-setting there (see its `router/docs/vnc.md`).
+Related, same measurement session: client-side resize worked end to end — noVNC with
+`resize=remote` moved `HEADLESS-1` to the browser viewport's size and tracked later
+window resizes. Studio's Wine virtual desktop can't follow that by itself; the
+`desktop-resize` program makes it (see "Panels: Wine virtual desktop").
 
 ## Wine 11.16 viewport regression — Kombucha pinned to 11.15, 2026-08-28
+
+**Pin moved to `stable+20261005101806` (wine-11.19) on 2026-10-05**: the viewport renders
+on it, under the winex11 + virtual desktop setup Studio runs on now ("Panels: Wine
+virtual desktop"). Not established whether 11.19 fixed the regression itself or that
+setup sidesteps it — a quick look at 11.19 on `winewayland.drv` was inconclusive (the
+main window stopped repainting, which may be its own problem). The record below is kept
+for the next time a bump breaks the viewport.
 
 Roblox Studio's **3D viewport renders nothing** on Kombucha `stable+20260824153321`
 (**wine-11.16**). Everything else about Studio is fine: it launches, logs in, the ribbon
@@ -582,8 +695,8 @@ one that presents empty frames look identical otherwise.
 |---|---|
 | Studio 0.734 / 0.735 / 0.736 (pinned via `forced_version`) | all broken |
 | DXVK vs Roblox's native Vulkan renderer (`renderer = "Vulkan"`) | both broken |
-| `winex11.drv` vs `winewayland.drv` | both broken |
-| Wine virtual-desktop on/off | both broken |
+| `winex11.drv` vs `winewayland.drv` | both broken — **invalid**: winex11 crashed on load every time (no `XDG_SESSION_TYPE`), so both runs were winewayland |
+| Wine virtual-desktop on/off | both broken — **invalid** for the same reason: winewayland ignores the virtual desktop |
 | Output resolution, 576x888 → 1920x1080 | all broken |
 | Image packages: Mesa 26.1.6 + labwc 0.20.1 vs Mesa 26.2.1 + labwc 0.20.2 | both broken |
 | Repo commits (a 2026-08-12 build of this image reproduces) | broken |
@@ -621,10 +734,9 @@ upstream fix to land in that same area.
 **Reported upstream as [WineHQ bug 60248](https://bugs.winehq.org/show_bug.cgi?id=60248)**
 (*"Roblox Studio 0.736: the editor never appears after opening a place"*), with the
 bisect, before/after screenshots and the engine/terminal logs from both builds attached.
-**Watch that bug rather than blind-bumping `KOMBUCHA_VERSION`** — the pin exists only
-until upstream fixes this, and the Dockerfile's `wine --version` test is the tripwire that
-stops a bump off 11.15 from silently reintroducing the bug. When a fix lands, test it
-before dropping the pin: `~/wine-bisect/` on the dev machine is a warm Wine build tree
+Bump `KOMBUCHA_VERSION` only after opening a place on the new build and seeing the
+viewport render; the Dockerfile's `wine --version` test only catches a tarball that isn't
+the Wine it claims to be. To bisect a future break: `~/wine-bisect/` on the dev machine is a warm Wine build tree
 (clone + ccache + both bisect builds) where `build.sh <commit> <name>` produces a testable
 install in a few minutes.
 
@@ -1042,11 +1154,11 @@ Vinegar's config) and ends with `exec supervisord -n -c /etc/roblox-studio/super
   env vars must be set (the ones `entrypoint.sh` itself exports for labwc/wayvnc aren't
   automatically visible to a fresh `docker exec` shell):
   ```
-  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0 HOME=/root \
+  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 HOME=/root \
          DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/xdg-runtime/bus"
   vinegar &
   ```
-  (Note `wayland-0`, not `wayland-1` — that was sway's socket name, labwc's is
+  (`DISPLAY=:0` is required — see "Panels: Wine virtual desktop". Note `wayland-0`, not `wayland-1` — that was sway's socket name, labwc's is
   different.) Consider adding an autostart mechanism once the project is stable enough
   that always-launching-Studio-on-boot is actually wanted — not done yet since this was
   still under active iteration.

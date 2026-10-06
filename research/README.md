@@ -27,6 +27,11 @@ need to verify a specific claim.
   dind/router structure, which no longer applies now that this is a standalone project —
   see `../plan.md` for the actual layout instead.)
 
+- `upstream-reports/` — drafts of bug reports for upstream projects (not filed yet): the
+  Wine virtual-desktop owned-popup z-order bug (with a bare Win32 repro) and Kombucha's
+  `XDG_SESSION_TYPE` crash. Both are worked around in this image; see CLAUDE.md's
+  "Panels: Wine virtual desktop".
+
 ## Note on scope drift from `code-docker`
 
 This research was originally done to evaluate folding a GPU-accelerated Roblox Studio

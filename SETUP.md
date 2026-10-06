@@ -47,11 +47,15 @@ below), or from the host:
 
 ```sh
 docker exec roblox-studio bash -c '
-  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0 HOME=/root \
+  export XDG_RUNTIME_DIR=/tmp/xdg-runtime WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 HOME=/root \
          DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/xdg-runtime/bus"
   vinegar &
 '
 ```
+
+`DISPLAY=:0` (labwc's XWayland) is not optional: without it Wine falls back to its
+Wayland driver, which ignores Studio's virtual desktop — Studio still opens, but its
+panels can't be docked or resized again (see "Once connected" below).
 
 ## Connecting with a real VNC client
 
@@ -153,9 +157,17 @@ scary "host key changed" warning every time the container comes back up.
   `labwc` config bug that broke titlebar dragging and the titlebar buttons for *every*
   client, real ones included; fixed 2026-08-29, see CLAUDE.md's "Titlebars were dead"
   section.)
+- **Roblox Studio fills the screen above the taskbar**, inside a Wine virtual desktop with
+  its own Windows-style taskbar at its bottom edge (listing Studio's windows; the labwc
+  taskbar below it lists only the desktop as a whole). That's deliberate: it's the only setup in which Studio's panels
+  and plugin windows can be dragged out, docked back (drop on another panel's title bar or
+  a dock edge) and resized. Floating panels stay above the main window.
 - **Resizing the client window resizes the remote desktop to match** (the RFB
-  `SetDesktopSize` extension — TigerVNC and most modern clients support requesting this,
-  and wayvnc's headless-Wayland backend can resize its virtual output live to fulfill it).
+  `SetDesktopSize` extension — noVNC's "Remote resizing", TigerVNC and most modern
+  clients), and Studio follows about two seconds after the window stops changing size.
+  `DESKTOP_RESOLUTION` (default `1920x1080`) is only the size before any client asks.
+- **The file manager is Thunar** (app launcher → "Thunar File Manager"). Nautilus is installed
+  only as a portal dependency and refuses to run as root, which everything here is.
 - Disconnecting the VNC client does **not** stop anything — labwc, Studio, Vinegar, the
   MCP bridge all keep running exactly as before. wayvnc is just a capture/input frontend
   over an already-running compositor output (`wlr-screencopy`); it doesn't own the
