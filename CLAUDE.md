@@ -186,7 +186,7 @@ inside a Wine virtual desktop — see "Panels: Wine virtual desktop"): a right-d
 open place's viewport turned the camera, measured over VNC 2026-10-05. The pointer-lock
 limitation the Milestone 1/2 pivot accepted was about `winewayland.drv`, which Studio no
 longer runs on. Through a VNC client's absolute pointer it spun faster the further a
-drag went, until the labwc/Xwayland patches in "Camera drag over VNC" below.
+drag went, until the patches in "Camera drag over VNC" below.
 
 **Confirmed as a bonus**: login state itself persists correctly across container
 restarts — a later full rebuild + `docker compose down/up` cycle came back up already
@@ -468,7 +468,7 @@ own — two in one directory and activation picks either) and makes Thunar the
 its binary references `org.gnome.Nautilus`, so a GTK/Chromium file picker going through
 the portal may still fail as root. Nothing here was seen using one.
 
-## Camera drag over VNC: patched labwc + Xwayland — 2026-10-06
+## Camera drag over VNC: patched labwc, Xwayland and winex11 — 2026-10-06
 
 Reported as: right-drag to turn Studio's camera goes haywire over VNC (mostly noVNC). Studio
 turns the camera by reading the pointer's distance from an anchor and warping it back
@@ -488,8 +488,19 @@ one move.
   the lock goes away, but only if the hint's surface commit has been applied by then,
   which it often isn't (wlroots applies it with the surface's buffered state). And while a
   lock is up, labwc drops absolute motion altogether.
-- **Fix, two patches** in `config/pointer-warp/`, built from the distro's own sources by the
-  Dockerfile into `/usr/local/bin` (each patch's comment says what it changes):
+- **And Wine reads each warp's move twice.** `X11DRV_SetCursorPos` grabs the pointer on
+  `root_window` around the warp. In a virtual desktop that is the desktop's own X window,
+  so the grab sends it an `EnterNotify` (mode `NotifyGrab`) carrying the position from
+  *before* the warp. explorer's thread owns that window and never set a warp serial, so it
+  passes the event on as mouse input, and the cursor jumps back to where it was warped
+  from. Found with `WINEDEBUG=+event,+cursor` on the probe below: after every
+  `SetCursorPos warped to 500,400` came `EnterNotify for hwnd/window <desktop> pos
+  (510,400) detail 2` from the other thread.
+- **Fix, three patches** in `config/pointer-warp/` (each patch's comment says what it
+  changes). labwc and Xwayland are built from the distro's own sources by the Dockerfile
+  into `/usr/local/bin`. winex11.so is built from the pinned Kombucha's Wine release and
+  patch set (`KOMBUCHA_WINE_VERSION`, `KOMBUCHA_PATCHES_REF`) and copied over the release's
+  own.
   - **Xwayland** (the main fix): for motion that arrives without relative motion (an
     absolute-only device), once an X client has warped the pointer, apply the device's
     movement since its previous event to where the warp left the pointer. Keep doing that
@@ -500,31 +511,41 @@ one move.
   - **labwc**: while the pointer is locked, send an absolute device's movement as relative
     motion instead of dropping it. Studio's camera doesn't need this; a client that keeps
     the cursor hidden (and so the lock up) did not move at all without it.
+  - **winex11**: ignore crossing events caused by a grab or ungrab. They aren't pointer
+    motion; the motion itself arrives as `MotionNotify` either way.
 - **Verified** with `research/upstream-reports/camprobe.c`, a Win32 stand-in for Studio's
   camera: it sets a near-blank cursor, reads the distance from the anchor and warps back
   on every move. It ran in a Wine virtual desktop on winex11, driven by `vncdotool`. The
-  table has the summed deltas it reported. It reads every move twice (seen in both builds,
-  cause not pinned down), so the patched column should be twice the drag:
+  table has the summed distances it read. With all three patches, sampling on a 16 ms
+  timer (`frame`, closer to a per-frame camera) also read exactly 40 px in 4, 10, 20 and 40
+  steps:
 
-  | Drag | Stock | Patched |
-  |---|---|---|
-  | 40 px in 20 steps | 878 | 76 |
-  | 40 px in 4 steps | 230 | 70 |
-  | 400 px in 100 steps, 17 ms apart | 40796 | 792 |
-  | 400 px in 200 steps, 5 ms apart | 79994 | 798 |
-  | 400 px, cursor fully hidden (lock stays up) | 4 (pointer dead; stock labwc) | 792 |
+  | Drag | Stock | labwc + Xwayland patched | All three patched |
+  |---|---|---|---|
+  | 40 px in 4 steps | 230 | 70 | 40 |
+  | 40 px in 10 steps | | 76 | 40 |
+  | 40 px in 40 steps | 1639 | 79 | 40 |
+  | 400 px in 100 steps, 17 ms apart | 40796 | 792 | 400 |
+  | 400 px in 200 steps, 5 ms apart | 79994 | 798 | 400 |
+  | 400 px, cursor fully hidden (lock stays up) | 4 (pointer dead; stock labwc) | 792 | |
 
   After a drag, plain moves put the X pointer exactly under the viewer's pointer again
-  (`xdotool getmouselocation`). Re-measuring in Studio itself was cut short: the copied
-  test login was revoked (below), so the Studio numbers above are from before the fix only.
+  (`xdotool getmouselocation`).
+- **In Studio itself**, with the labwc and Xwayland patches only (scripted right-drag,
+  yaw from a plugin printing `workspace.CurrentCamera`): 40 px gave -24°, -40°, -61.6° and
+  -120° in 4, 10, 20 and 40 steps. No longer quadratic, but still growing with the number
+  of events, by about 3° per event. Not yet re-measured with the winex11 patch, which is
+  the remaining per-event leak the probe showed.
 - **Not covered**: a drag still ends at the edge of the viewer's window, since nothing
   recentres the viewer's own pointer (that would need browser Pointer Lock in noVNC plus a
   relative-motion RFB extension wayvnc doesn't have). And a client that warps the pointer
   with no button held while several events land between two of its warps (a game's
   mouse-look) gets one jump per such event.
-- **Escape hatch**: `VNC_POINTER_WARP_FIX=false` runs the distro builds
-  (`labwc-service.sh`). Upstream drafts: `research/upstream-reports/xwayland-absolute-motion-after-warp.md`,
-  `research/upstream-reports/labwc-locked-absolute-motion.md`.
+- **Escape hatch**: `VNC_POINTER_WARP_FIX=false` runs the distro labwc and Xwayland
+  (`labwc-service.sh`). The winex11 fix has no switch; it only drops events that were
+  never pointer motion. Upstream drafts: `research/upstream-reports/xwayland-absolute-motion-after-warp.md`,
+  `research/upstream-reports/labwc-locked-absolute-motion.md`,
+  `research/upstream-reports/wine-grab-crossing-stale-position.md`.
 - **Copying `data/` into a second Studio container logs both out.** Roblox rotates the
   OAuth refresh token on use and revokes the whole family when an old one is replayed:
   the copy refreshed first, the original launched 30 s later with the old token and got

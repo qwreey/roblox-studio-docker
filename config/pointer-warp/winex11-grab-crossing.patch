@@ -1,0 +1,33 @@
+winex11: don't turn a grab's crossing events into mouse input.
+
+X11DRV_SetCursorPos grabs the pointer on root_window around XWarpPointer.
+In a Wine virtual desktop root_window is the desktop's own X window, so
+the grab sends that window an EnterNotify (mode NotifyGrab, detail
+NotifyInferior) carrying the pointer position from *before* the warp.
+The desktop's window belongs to explorer's thread, whose warp_serial
+the warp never set, so is_old_motion_event() lets the event through and
+X11DRV_EnterNotify sends the stale position as mouse input: the cursor
+jumps back to where it was warped from. A program that warps the cursor
+back to an anchor after each move (a 3D viewport's camera) then reads
+every move twice. Measured with research/upstream-reports/camprobe.c
+over VNC: a 40 px drag read as 70-79 px, exactly 40 with this.
+
+A crossing caused by a grab or ungrab is not pointer motion; the motion
+itself arrives as MotionNotify either way.
+
+--- a/dlls/winex11.drv/mouse.c
++++ b/dlls/winex11.drv/mouse.c
+@@ -1652,6 +1652,13 @@
+ 
+     if (hwnd == NtUserGetAncestor( get_capture_window(), GA_ROOT )) return FALSE;
+ 
++    /* A crossing caused by a grab is not pointer motion. */
++    if (event->mode == NotifyGrab || event->mode == NotifyUngrab)
++    {
++        TRACE( "pos %d,%d grab crossing, ignoring\n", event->x, event->y );
++        return FALSE;
++    }
++
+     if (is_old_motion_event( event->serial ))
+     {
+         TRACE( "pos %d,%d old serial %lu, ignoring\n", event->x, event->y, event->serial );

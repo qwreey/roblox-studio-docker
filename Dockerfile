@@ -1,3 +1,10 @@
+# Kombucha's Wine version and the vinegarhq/kombucha commit its pinned release was built
+# from (that release's `created_at`, matched against the repository's history). Global
+# because both the runtime stage's Kombucha pin and winex11-build below need them; move all
+# three together (KOMBUCHA_VERSION is in the runtime stage).
+ARG KOMBUCHA_WINE_VERSION=wine-11.19
+ARG KOMBUCHA_PATCHES_REF=cdf42b8f1f3a87d8952e072d6a46a0d6aef659e6
+
 # desktop-resize.exe - the Windows-side half of keeping Studio's Wine virtual desktop the
 # size of the screen (config/desktop-resize/desktop-resize.c, run by
 # desktop-resize-service.sh). Built in its own stage so the mingw toolchain never reaches
@@ -13,6 +20,35 @@ RUN x86_64-w64-mingw32-gcc -municode -mwindows -O2 -s -Wall -Werror \
 # to any `rojo serve` with the same protocol - 5, Rojo 7.7.0 and later - so this pin moves
 # only when a project needs a newer protocol. Built in its own stage so git, python and
 # rojo never reach the runtime image.
+# winex11.so for the pinned Kombucha, rebuilt from the same Wine release and Kombucha
+# patch set plus config/pointer-warp/winex11-grab-crossing.patch, and copied over the
+# release's own in the runtime stage. Why: that patch's own comment and CLAUDE.md's "Camera
+# drag over VNC". Only the unix-side winex11.so changes, so only it is built (a few
+# minutes, against Wine's own headers; it talks to the release's win32u.so through the
+# same version's interface).
+FROM archlinux:latest AS winex11-build
+ARG KOMBUCHA_WINE_VERSION
+ARG KOMBUCHA_PATCHES_REF
+RUN pacman -Syu --noconfirm --needed base-devel mingw-w64-gcc libx11 libxext libxfixes libxi \
+      libxrandr libxrender libxcursor libxcomposite libxkbcommon wayland wayland-protocols \
+      vulkan-headers vulkan-icd-loader freetype2 fontconfig gnutls
+ADD https://github.com/vinegarhq/kombucha.git#${KOMBUCHA_PATCHES_REF}:patches/stable /src/kombucha-patches
+COPY config/pointer-warp/winex11-grab-crossing.patch /src/
+RUN v="${KOMBUCHA_WINE_VERSION#wine-}" \
+    && mkdir -p /src/wine \
+    && curl -fsSL "https://dl.winehq.org/wine/source/${v%%.*}.x/wine-${v}.tar.xz" \
+         | tar xJ -C /src/wine --strip-components=1 \
+    && cd /src/wine \
+    && for p in /src/kombucha-patches/*.patch; do patch -p1 --fuzz=0 -s < "$p" || exit 1; done \
+    && patch -p1 --fuzz=0 < /src/winex11-grab-crossing.patch \
+    && ./configure --enable-archs=x86_64 --with-mingw --disable-tests --disable-win16 \
+         --without-oss --without-alsa --without-pulse --without-gstreamer --without-cups \
+         --without-sane --without-krb5 --without-netapi --without-v4l2 --without-pcap \
+         --without-usb --without-sdl --without-capi --without-gphoto --without-opencl > /dev/null \
+    && make -j"$(nproc)" dlls/winex11.drv/winex11.so > /dev/null \
+    && install -Dm755 dlls/winex11.drv/winex11.so /out/winex11.so \
+    && strip --strip-unneeded /out/winex11.so
+
 FROM archlinux:latest AS studio-sync-plugin-build
 ARG ROJO_VERSION=7.7.1
 RUN pacman -Syu --noconfirm --needed git python unzip
@@ -142,7 +178,7 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
 # `+` in the real tag name, `stable+20261005133651`) because it appears in both the
 # release tag and the asset filename, and GitHub serves neither unencoded.
 ARG KOMBUCHA_VERSION=stable%2B20261005133651
-ARG KOMBUCHA_WINE_VERSION=wine-11.19
+ARG KOMBUCHA_WINE_VERSION
 RUN curl -fsSL "https://github.com/vinegarhq/kombucha/releases/download/${KOMBUCHA_VERSION}/kombucha-${KOMBUCHA_VERSION}.tar.xz" -o /tmp/kombucha.tar.xz \
     && mkdir -p /tmp/kombucha \
     && tar xJf /tmp/kombucha.tar.xz -C /tmp/kombucha \
@@ -150,6 +186,8 @@ RUN curl -fsSL "https://github.com/vinegarhq/kombucha/releases/download/${KOMBUC
     && rm -rf /tmp/kombucha /tmp/kombucha.tar.xz \
     && test "$(WINEPREFIX=/tmp/wine-version-probe /opt/kombucha-pinned/bin/wine --version)" = "${KOMBUCHA_WINE_VERSION}" \
     && rm -rf /tmp/wine-version-probe
+# The release's winex11.so, replaced by winex11-build's (see that stage).
+COPY --from=winex11-build /out/winex11.so /opt/kombucha-pinned/lib/wine/x86_64-unix/winex11.so
 
 # Not cosmetic: Kombucha's winex11 does `strcmp(getenv("XDG_SESSION_TYPE"), "wayland")`
 # with no NULL check (its "Don't hide cursor under X11 sessions" patch), so with this
