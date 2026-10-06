@@ -50,6 +50,9 @@ services:
       # version. Purely a wayvnc capture/encode setting - it has nothing to do with the
       # /dev/dri passthrough above, which labwc and Roblox Studio use regardless.
       VNC_GPU: "${VNC_GPU:-}"
+      # Starting screen size; VNC clients resize it, and Studio's Wine virtual desktop
+      # follows (desktop-resize-service.sh).
+      DESKTOP_RESOLUTION: "${DESKTOP_RESOLUTION:-1920x1080}"
       # MCP bridge (mcp-bridge.sh) — NOT auto-started by entrypoint.sh, see that script's
       # own header comment and SETUP.md's "Studio MCP over the network" section. MCP_PORT
       # here is the fixed container-internal Caddy listen port (mirrors the VNC_PORT

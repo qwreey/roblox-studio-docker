@@ -15,4 +15,7 @@ webview = ""
 # Note this file is only seeded on first run (entrypoint.sh never overwrites an existing
 # config.toml), so an already-deployed instance that predates the pin needs this line
 # added by hand.
+#
+# virtual_desktop is not here on purpose: entrypoint.sh adds it (sized from
+# DESKTOP_RESOLUTION) to new and existing configs alike, once.
 wineroot = "/opt/kombucha-pinned"

@@ -34,6 +34,8 @@ if [[ -n "${VNC_BIND_ALIAS}" ]]; then
   echo "[wayvnc-service] binding wayvnc to ${VNC_BIND_ADDR} (resolved from ${VNC_BIND_ALIAS})"
 fi
 
+# Resizing stays on (wayvnc's default): a client asking for its own window size resizes
+# HEADLESS-1, and desktop-resize-service.sh resizes Studio's Wine virtual desktop to follow.
 WAYVNC_ARGS=(--output=HEADLESS-1 "${VNC_BIND_ADDR}" "${VNC_PORT}")
 
 # VNC_GPU turns on wayvnc's own --gpu ("enable features that need GPU"): DMA-BUF capture

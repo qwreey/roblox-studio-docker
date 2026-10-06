@@ -21,6 +21,9 @@ export XDG_RUNTIME_DIR="/tmp/xdg-runtime"
 rm -rf "${XDG_RUNTIME_DIR}"
 mkdir -p "${XDG_RUNTIME_DIR}"
 chmod 700 "${XDG_RUNTIME_DIR}"
+# Same story for XWayland: a leftover /tmp/.X0-lock makes labwc's next XWayland take :1,
+# then :2..., and Studio needs a known display (SETUP.md's launch snippet uses :0).
+rm -f /tmp/.X[0-9]*-lock /tmp/.X11-unix/X[0-9]*
 
 # Wait for this container's default route before starting anything, when a network
 # provider (code-docker's netinit-docker, see that project's
@@ -81,8 +84,36 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
 # a fresh ./data/vinegar-config volume hits the blank-WebView2-login bug documented in
 # CLAUDE.md's "Milestone 3" section on its very first launch.
 mkdir -p "${HOME}/.config/vinegar"
-if [[ ! -f "${HOME}/.config/vinegar/config.toml" ]]; then
-  cp /etc/vinegar-default-config.toml "${HOME}/.config/vinegar/config.toml"
+vinegar_config="${HOME}/.config/vinegar/config.toml"
+if [[ ! -f "${vinegar_config}" ]]; then
+  cp /etc/vinegar-default-config.toml "${vinegar_config}"
+fi
+
+# Studio runs inside a Wine virtual desktop filling the screen above waybar - the only
+# setup in which its panels can be dragged out, docked back and resized (CLAUDE.md's
+# "Panels: Wine virtual desktop"). Added once per config, by marker rather than by
+# "is the key missing", so an owner who deliberately deletes the line keeps it deleted;
+# the seeding above can't do it because it never touches an existing config.toml.
+# Keeping its size matched to the screen from then on, including when a VNC client
+# resizes it, is the desktop-resize program's job (desktop-resize-service.sh).
+. /etc/roblox-studio/desktop-size.sh
+export DESKTOP_RESOLUTION="${DESKTOP_RESOLUTION:-1920x1080}"
+if ! virtual_desktop_size="$(desktop_size_for_screen "${DESKTOP_RESOLUTION}")"; then
+  echo >&2 "[entrypoint] DESKTOP_RESOLUTION=${DESKTOP_RESOLUTION} is not a WIDTHxHEIGHT of at least 640 wide and 400 tall above waybar - refusing to start with a screen Studio can't be sized to"
+  exit 1
+fi
+virtual_desktop_marker="${HOME}/.config/vinegar/.virtual-desktop-added"
+if [[ ! -f "${virtual_desktop_marker}" ]]; then
+  if grep -q '^virtual_desktop[[:space:]]*=' "${vinegar_config}"; then
+    echo "[entrypoint] Vinegar config already sets virtual_desktop - leaving it"
+  elif grep -q '^\[studio\][[:space:]]*$' "${vinegar_config}"; then
+    sed -i "/^\[studio\][[:space:]]*\$/a virtual_desktop = \"${virtual_desktop_size}\"" "${vinegar_config}"
+    echo "[entrypoint] enabled Vinegar's virtual_desktop (${virtual_desktop_size})"
+  else
+    printf '\n[studio]\nvirtual_desktop = "%s"\n' "${virtual_desktop_size}" >> "${vinegar_config}"
+    echo "[entrypoint] enabled Vinegar's virtual_desktop (${virtual_desktop_size})"
+  fi
+  touch "${virtual_desktop_marker}"
 fi
 
 echo "[entrypoint] handing off to supervisord"

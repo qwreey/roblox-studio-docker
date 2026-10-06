@@ -15,8 +15,10 @@ set -eu
   # labwc (unlike sway) has no built-in output-resolution config directive - force it via
   # wlr-randr, a generic wlroots-protocol client that works regardless of compositor.
   # --custom-mode (not --mode) is required: the headless backend only pre-registers a
-  # 1280x720 default and has no fixed EDID mode list to select from.
-  wlr-randr --output HEADLESS-1 --custom-mode 1920x1080 \
+  # 1280x720 default and has no fixed EDID mode list to select from. DESKTOP_RESOLUTION
+  # is validated in entrypoint.sh; it's only the starting size - VNC clients resize the
+  # output later, and desktop-resize-service.sh keeps Studio's desktop matched to it.
+  wlr-randr --output HEADLESS-1 --custom-mode "${DESKTOP_RESOLUTION:-1920x1080}" \
     || echo "[labwc-service] WARNING: wlr-randr failed to set output mode" >&2
 
   # D-Bus service activation (xdg-desktop-portal and friends, started on-demand) uses

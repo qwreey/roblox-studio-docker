@@ -38,4 +38,14 @@
          desktop to root-menu (menu.xml), titlebar drag to Move, border/corner drag to
          Resize, titlebar double-click to ToggleMaximize and the titlebar buttons. -->
   </mouse>
+  <windowRules>
+    <!-- Studio's Wine virtual desktop (Vinegar names it "<uuid> - Wine Desktop"). It is
+         sized (desktop-size.sh) to exactly the area above waybar, so it belongs flush in
+         that area's top-left corner with no titlebar of ours adding to its height.
+         fixedPosition keeps an Alt-drag from moving it off that spot. -->
+    <windowRule identifier="explorer.exe" title="* - Wine Desktop" serverDecoration="no">
+      <fixedPosition>yes</fixedPosition>
+      <action name="MoveTo" x="0" y="0" />
+    </windowRule>
+  </windowRules>
 </labwc_config>

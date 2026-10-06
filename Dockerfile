@@ -1,3 +1,13 @@
+# desktop-resize.exe - the Windows-side half of keeping Studio's Wine virtual desktop the
+# size of the screen (config/desktop-resize/desktop-resize.c, run by
+# desktop-resize-service.sh). Built in its own stage so the mingw toolchain never reaches
+# the runtime image.
+FROM archlinux:latest AS desktop-resize-build
+RUN pacman -Syu --noconfirm --needed mingw-w64-gcc
+COPY config/desktop-resize/desktop-resize.c /src/desktop-resize.c
+RUN x86_64-w64-mingw32-gcc -municode -mwindows -O2 -s -Wall -Werror \
+      -o /src/desktop-resize.exe /src/desktop-resize.c -luser32 -lshell32
+
 FROM archlinux:latest
 
 RUN pacman -Syu --noconfirm --needed \
@@ -214,7 +224,7 @@ RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh
 # Dockerfile, which does the same for the same reason.
 RUN mkdir -p /etc/roblox-studio/supervisord.d \
       /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog \
-      /var/log/dns-local
+      /var/log/dns-local /var/log/desktop-resize
 COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
 COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
 COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
@@ -225,6 +235,9 @@ COPY config/supervisor/novnc-service.sh /etc/roblox-studio/novnc-service.sh
 COPY config/supervisor/mcp-bridge-service.sh /etc/roblox-studio/mcp-bridge-service.sh
 COPY config/supervisor/critical-watchdog-service.sh /etc/roblox-studio/critical-watchdog-service.sh
 COPY config/supervisor/dns-local-service.sh /etc/roblox-studio/dns-local-service.sh
+COPY config/supervisor/desktop-size.sh /etc/roblox-studio/desktop-size.sh
+COPY config/supervisor/desktop-resize-service.sh /etc/roblox-studio/desktop-resize-service.sh
+COPY --from=desktop-resize-build /src/desktop-resize.exe /usr/local/lib/roblox-studio/desktop-resize.exe
 RUN chmod +x /etc/roblox-studio/*-service.sh
 
 # qwreey/router-docker-client's own subdirectories, fetched directly at build
