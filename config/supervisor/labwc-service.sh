@@ -32,4 +32,24 @@ set -eu
     2>/dev/null || true
 ) &
 
-exec labwc
+# The /usr/local/bin builds carry config/pointer-warp/'s patches, which make a right-drag
+# in Studio's viewport turn the camera by the distance the VNC viewer's pointer moved
+# (see the Dockerfile and CLAUDE.md's "Camera drag over VNC"). VNC_POINTER_WARP_FIX=false
+# runs the distro builds instead - the escape hatch if the patched ones misbehave.
+# WLR_XWAYLAND is how wlroots is told which Xwayland to spawn; the default is the
+# compiled-in /usr/bin/Xwayland.
+case "${VNC_POINTER_WARP_FIX:-true}" in
+  ''|1|true|TRUE|yes|YES|on|ON)
+    export WLR_XWAYLAND=/usr/local/bin/Xwayland
+    exec /usr/local/bin/labwc
+    ;;
+  0|false|FALSE|no|NO|off|OFF)
+    echo "[labwc-service] VNC_POINTER_WARP_FIX=${VNC_POINTER_WARP_FIX} — running the distro labwc/Xwayland; dragging Studio's camera over VNC will spin it"
+    exec /usr/bin/labwc
+    ;;
+  *)
+    echo "[labwc-service] WARNING: VNC_POINTER_WARP_FIX=${VNC_POINTER_WARP_FIX} is not a recognized boolean — keeping the fix on" >&2
+    export WLR_XWAYLAND=/usr/local/bin/Xwayland
+    exec /usr/local/bin/labwc
+    ;;
+esac

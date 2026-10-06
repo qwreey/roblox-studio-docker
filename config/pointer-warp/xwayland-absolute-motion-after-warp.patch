@@ -1,0 +1,137 @@
+--- a/hw/xwayland/xwayland-input.c
++++ b/hw/xwayland/xwayland-input.c
+@@ -546,6 +546,7 @@
+     xwl_seat->pointer_enter_serial = serial;
+ 
+     xwl_seat->focus_window = wl_surface_get_user_data(surface);
++    xwl_seat->abs_motion.valid = FALSE;
+     dx = xwl_seat->focus_window->toplevel->drawable.x;
+     dy = xwl_seat->focus_window->toplevel->drawable.y;
+ 
+@@ -662,6 +663,75 @@
+                                             dx_unaccel, dy_unaccel);
+ }
+ 
++/*
++ * An absolute-only pointer (one whose motion comes without
++ * zwp_relative_pointer_v1 motion in the same frame, such as a VNC or RDP
++ * server's virtual pointer) only knows where the pointer is on the remote
++ * viewer's side.  A client that captures the pointer by warping it back to
++ * an anchor after every move and reads each move as the distance from that
++ * anchor (a 3D viewport's camera, typically) would then read the viewer's
++ * whole distance from the anchor on every event instead of the distance
++ * just moved, and spin faster the further the drag goes.
++ *
++ * So once a client has warped the pointer, apply the device's movement
++ * since its previous event to where the warp left the pointer, and keep
++ * doing so while a button is held, since the client may warp only once
++ * for several events.  The first event after that takes the device's own
++ * position again.
++ */
++static void
++xwl_seat_follow_client_warp(struct xwl_seat *xwl_seat, int *x, int *y)
++{
++    DeviceIntPtr dev = xwl_seat->pointer;
++    Bool held = dev->button && dev->button->buttonsDown > 0;
++    int dx = *x - xwl_seat->abs_motion.last_x;
++    int dy = *y - xwl_seat->abs_motion.last_y;
++    int cx, cy;
++
++    xwl_seat->abs_motion.relative = xwl_seat->abs_motion.valid &&
++        (xwl_seat->abs_motion.warped ||
++         (xwl_seat->abs_motion.relative && held));
++    xwl_seat->abs_motion.valid = TRUE;
++    xwl_seat->abs_motion.warped = FALSE;
++    xwl_seat->abs_motion.last_x = *x;
++    xwl_seat->abs_motion.last_y = *y;
++
++    if (!xwl_seat->abs_motion.relative)
++        return;
++
++    miPointerGetPosition(dev, &cx, &cy);
++    *x = cx + dx;
++    *y = cy + dy;
++}
++
++/*
++ * The compositor sends relative motion alone for an absolute-only device
++ * while the pointer is locked (there is no position to send then).  Count it
++ * into the device's last position, or the next absolute event would apply the
++ * same movement a second time.  A device that sends both kinds of motion is
++ * a relative one (a mouse), which needs none of this.
++ */
++static void
++xwl_seat_follow_relative_motion(struct xwl_seat *xwl_seat, Bool has_absolute)
++{
++    struct xwl_screen *xwl_screen = xwl_seat->xwl_screen;
++    double dx = xwl_seat->pending_pointer_event.dx;
++    double dy = xwl_seat->pending_pointer_event.dy;
++
++    if (has_absolute) {
++        xwl_seat->abs_motion.valid = FALSE;
++        return;
++    }
++
++    dx *= xwl_screen->global_surface_scale;
++    dy *= xwl_screen->global_surface_scale;
++    dx *= xwl_seat->focus_window->viewport_scale_x;
++    dy *= xwl_seat->focus_window->viewport_scale_y;
++
++    xwl_seat->abs_motion.last_x += (int) dx;
++    xwl_seat->abs_motion.last_y += (int) dy;
++}
++
+ static void
+ dispatch_absolute_motion(struct xwl_seat *xwl_seat)
+ {
+@@ -685,6 +755,9 @@
+     x = drawable_x + event_x;
+     y = drawable_y + event_y;
+ 
++    if (!xwl_seat->pending_pointer_event.has_relative)
++        xwl_seat_follow_client_warp(xwl_seat, &x, &y);
++
+     valuator_mask_zero(&mask);
+     valuator_mask_set(&mask, 0, x);
+     valuator_mask_set(&mask, 1, y);
+@@ -764,6 +837,9 @@
+     Bool has_relative = xwl_seat->pending_pointer_event.has_relative;
+     Bool has_absolute = xwl_seat->pending_pointer_event.has_absolute;
+ 
++    if (has_relative)
++        xwl_seat_follow_relative_motion(xwl_seat, has_absolute);
++
+     if (xwl_seat->pointer_warp_emulator && has_relative) {
+         dispatch_relative_motion_with_warp(xwl_seat);
+     } else {
+--- a/hw/xwayland/xwayland-input.h
++++ b/hw/xwayland/xwayland-input.h
+@@ -123,6 +123,16 @@
+         Bool has_horizontal_scroll_v120;
+     } pending_pointer_event;
+ 
++    /* Absolute-only motion after a client warp, see
++     * xwl_seat_follow_client_warp() */
++    struct {
++        Bool valid;     /* last_x/last_y hold the previous event */
++        int last_x;
++        int last_y;
++        Bool warped;    /* a client warped the pointer since that event */
++        Bool relative;  /* that event was applied relative to a warp */
++    } abs_motion;
++
+     struct xorg_list tablets;
+     struct xorg_list tablet_tools;
+     struct xorg_list tablet_pads;
+--- a/hw/xwayland/xwayland-screen.c
++++ b/hw/xwayland/xwayland-screen.c
+@@ -304,6 +304,9 @@
+     if (!xwl_seat)
+         xwl_seat = xwl_screen_get_default_seat(xwl_screen);
+ 
++    if (xwl_seat)
++        xwl_seat->abs_motion.warped = TRUE;
++
+     if (!window)
+         window = XYToWindow(sprite, x, y);
+ 

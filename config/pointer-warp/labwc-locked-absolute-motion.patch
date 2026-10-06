@@ -1,0 +1,64 @@
+--- a/include/labwc.h
++++ b/include/labwc.h
+@@ -55,6 +55,16 @@
+ 
+ 	struct wlr_pointer_constraint_v1 *current_constraint;
+ 
++	/*
++	 * The absolute pointer device that moved last and where it put the
++	 * pointer, to turn its motion into relative motion while a client
++	 * holds the pointer locked: see handle_motion_absolute().
++	 */
++	struct {
++		struct wlr_input_device *device;
++		double lx, ly;
++	} last_absolute;
++
+ 	/* Used to hide the workspace OSD after switching workspaces */
+ 	struct wl_event_source *workspace_osd_timer;
+ 	bool workspace_osd_shown_by_modifier;
+--- a/src/input/cursor.c
++++ b/src/input/cursor.c
+@@ -984,6 +984,29 @@
+ 	wlr_cursor_absolute_to_layout_coords(seat->cursor,
+ 		&event->pointer->base, event->x, event->y, &lx, &ly);
+ 
++	/*
++	 * A locked pointer takes relative motion only, and the motion below
++	 * is dropped while one is active (preprocess_cursor_motion()).  An
++	 * absolute device - a VNC or RDP server's virtual pointer - would
++	 * then not move it at all, so send the device's own movement since
++	 * its previous event as relative motion instead.  Xwayland locks the
++	 * pointer this way whenever an X client warps a hidden cursor, which
++	 * is how a 3D viewport keeps its cursor in place while dragging.
++	 */
++	struct wlr_input_device *device = &event->pointer->base;
++	if (cursor_locked(seat, event->pointer)
++			&& seat->last_absolute.device == device) {
++		double rel_dx = lx - seat->last_absolute.lx;
++		double rel_dy = ly - seat->last_absolute.ly;
++		wlr_relative_pointer_manager_v1_send_relative_motion(
++			server.relative_pointer_manager, seat->wlr_seat,
++			(uint64_t)event->time_msec * 1000,
++			rel_dx, rel_dy, rel_dx, rel_dy);
++	}
++	seat->last_absolute.device = device;
++	seat->last_absolute.lx = lx;
++	seat->last_absolute.ly = ly;
++
+ 	double dx = lx - seat->cursor->x;
+ 	double dy = ly - seat->cursor->y;
+ 
+--- a/src/seat.c
++++ b/src/seat.c
+@@ -44,6 +44,10 @@
+ 	wl_list_remove(&input->link);
+ 	wl_list_remove(&input->destroy.link);
+ 
++	if (input->seat->last_absolute.device == input->wlr_input_device) {
++		input->seat->last_absolute.device = NULL;
++	}
++
+ 	/* `struct keyboard` is derived and has some extra clean up to do */
+ 	if (input->wlr_input_device->type == WLR_INPUT_DEVICE_KEYBOARD) {
+ 		struct keyboard *keyboard = (struct keyboard *)input;

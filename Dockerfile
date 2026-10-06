@@ -69,6 +69,12 @@ RUN pacman -Syu --noconfirm --needed \
       supervisor \
       dnsmasq \
       python \
+      meson \
+      ninja \
+      xorgproto \
+      xtrans \
+      libxkbfile \
+      xorg-font-util \
     && pacman -Scc --noconfirm \
     && rm -rf /var/cache/pacman/pkg/*
 
@@ -279,6 +285,37 @@ COPY config/wine-owned-popups/wine-owned-popups.c /tmp/wine-owned-popups.c
 RUN gcc -O2 -Wall -Wextra -Werror -o /usr/local/bin/wine-owned-popups /tmp/wine-owned-popups.c -lX11 \
     && rm /tmp/wine-owned-popups.c
 RUN chmod +x /etc/roblox-studio/*-service.sh
+
+# labwc and Xwayland, rebuilt with config/pointer-warp/'s two patches into /usr/local/bin
+# (the distro builds stay in /usr/bin; labwc-service.sh picks one by VNC_POINTER_WARP_FIX).
+# They make a dragged 3D camera usable through VNC's absolute pointer - what each one
+# fixes: the patches' own comments and CLAUDE.md's "Camera drag over VNC". Built here, from
+# the source of exactly the version pacman installed above, so both match the wlroots and
+# everything else this image ships; `--fuzz=0` makes a release that moved the patched
+# code fail the build instead of applying a hunk somewhere else. Their build-only
+# dependencies (meson ... xorg-font-util) are in the pacman list at the top.
+COPY config/pointer-warp/ /tmp/pointer-warp/
+RUN pkgver() { pacman -Q "$1" | awk '{print $2}' | sed 's/^[0-9]*://; s/-[^-]*$//'; } \
+    && LABWC_VERSION="$(pkgver labwc)" && XWAYLAND_VERSION="$(pkgver xorg-xwayland)" \
+    && mkdir -p /tmp/pointer-warp/labwc /tmp/pointer-warp/xwayland \
+    && curl -fsSL "https://github.com/labwc/labwc/archive/refs/tags/${LABWC_VERSION}.tar.gz" \
+         | tar xz -C /tmp/pointer-warp/labwc --strip-components=1 \
+    && curl -fsSL "https://xorg.freedesktop.org/archive/individual/xserver/xwayland-${XWAYLAND_VERSION}.tar.xz" \
+         | tar xJ -C /tmp/pointer-warp/xwayland --strip-components=1 \
+    && patch -d /tmp/pointer-warp/labwc -p1 --fuzz=0 < /tmp/pointer-warp/labwc-locked-absolute-motion.patch \
+    && patch -d /tmp/pointer-warp/xwayland -p1 --fuzz=0 < /tmp/pointer-warp/xwayland-absolute-motion-after-warp.patch \
+    && meson setup /tmp/pointer-warp/labwc/build /tmp/pointer-warp/labwc --buildtype=release \
+         -Dxwayland=enabled -Dman-pages=disabled -Dnls=disabled -Dlabnag=disabled -Dsystemd-session=disabled \
+    && ninja -C /tmp/pointer-warp/labwc/build \
+    && meson setup /tmp/pointer-warp/xwayland/build /tmp/pointer-warp/xwayland --buildtype=release \
+         -Dipv6=true -Dxvfb=false -Dxdmcp=false -Dxcsecurity=true -Ddri3=true -Dglamor=true -Dlibdecor=true \
+         -Dxkb_dir=/usr/share/X11/xkb -Dxkb_output_dir=/var/lib/xkb \
+    && ninja -C /tmp/pointer-warp/xwayland/build \
+    && install -m755 /tmp/pointer-warp/labwc/build/labwc /usr/local/bin/labwc \
+    && install -m755 /tmp/pointer-warp/xwayland/build/hw/xwayland/Xwayland /usr/local/bin/Xwayland \
+    && /usr/local/bin/labwc --version | grep -q "^labwc ${LABWC_VERSION} (+xwayland" \
+    && /usr/local/bin/Xwayland -version 2>&1 | grep -q "Xwayland Version ${XWAYLAND_VERSION} " \
+    && rm -rf /tmp/pointer-warp
 
 # qwreey/router-docker-client's own subdirectories, fetched directly at build
 # time, pinned to that repo's release tag (see its own CLAUDE.md;

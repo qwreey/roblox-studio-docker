@@ -50,6 +50,9 @@ services:
       # version. Purely a wayvnc capture/encode setting - it has nothing to do with the
       # /dev/dri passthrough above, which labwc and Roblox Studio use regardless.
       VNC_GPU: "${VNC_GPU:-}"
+      # On by default: patched labwc/Xwayland that keep a right-drag of Studio's camera
+      # proportional over VNC (labwc-service.sh). "false" falls back to the distro builds.
+      VNC_POINTER_WARP_FIX: "${VNC_POINTER_WARP_FIX:-}"
       # Starting screen size; VNC clients resize it, and Studio's Wine virtual desktop
       # follows (desktop-resize-service.sh).
       DESKTOP_RESOLUTION: "${DESKTOP_RESOLUTION:-1920x1080}"

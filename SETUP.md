@@ -20,10 +20,7 @@ crash (see "Studio MCP over the network" below).
 
 Not yet done: Milestone 4 (a standalone Chrome-works check — Chrome already works fine as
 part of the login flow, just not separately verified per the original plan), Chrome's own
-profile isn't persisted (not needed yet — see `plan.md` §5), and edit-mode camera
-rotation specifically hasn't been stress-tested (this was a known, accepted risk from the
-Wayland architecture decision — see `CLAUDE.md` — but interaction in general is now
-working well, better than that pessimistic baseline expected).
+profile isn't persisted (not needed yet — see `plan.md` §5).
 
 ## Build & run
 
@@ -162,6 +159,11 @@ scary "host key changed" warning every time the container comes back up.
   taskbar below it lists only the desktop as a whole). That's deliberate: it's the only setup in which Studio's panels
   and plugin windows can be dragged out, docked back (drop on another panel's title bar or
   a dock edge) and resized. Floating panels stay above the main window.
+- **Right-drag in the 3D view turns the camera by how far you move**, as on Windows. A drag
+  ends at the edge of your VNC window, though: the pointer is your own and can't be
+  re-centred like a local mouse, so for a long turn, release and drag again. (Before
+  2026-10-06 the camera spun faster the further the drag went; if that ever comes back,
+  see CLAUDE.md's "Camera drag over VNC".)
 - **Resizing the client window resizes the remote desktop to match** (the RFB
   `SetDesktopSize` extension — noVNC's "Remote resizing", TigerVNC and most modern
   clients), and Studio follows about two seconds after the window stops changing size.

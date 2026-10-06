@@ -185,8 +185,8 @@ of these six having been silently reverted before re-investigating from scratch.
 inside a Wine virtual desktop — see "Panels: Wine virtual desktop"): a right-drag in an
 open place's viewport turned the camera, measured over VNC 2026-10-05. The pointer-lock
 limitation the Milestone 1/2 pivot accepted was about `winewayland.drv`, which Studio no
-longer runs on. Not measured: whether the rotation speed feels right through a VNC
-client's absolute pointer.
+longer runs on. Through a VNC client's absolute pointer it spun faster the further a
+drag went, until the labwc/Xwayland patches in "Camera drag over VNC" below.
 
 **Confirmed as a bonus**: login state itself persists correctly across container
 restarts — a later full rebuild + `docker compose down/up` cycle came back up already
@@ -467,6 +467,68 @@ own — two in one directory and activation picks either) and makes Thunar the
 `inode/directory` handler. Untested: xdg-desktop-portal-gnome implements FileChooser and
 its binary references `org.gnome.Nautilus`, so a GTK/Chromium file picker going through
 the portal may still fail as root. Nothing here was seen using one.
+
+## Camera drag over VNC: patched labwc + Xwayland — 2026-10-06
+
+Reported as: right-drag to turn Studio's camera goes haywire over VNC (mostly noVNC). Studio
+turns the camera by reading the pointer's distance from an anchor and warping it back
+there (`SetCursorPos`) after every move. A VNC viewer, though, only ever sends where *its*
+pointer is (RFB has no relative motion; wayvnc injects
+`zwlr_virtual_pointer_v1.motion_absolute`). So each event put the pointer back at the
+viewer's position, and Studio read the viewer's *whole* distance from the anchor as that
+one move.
+
+- **Measured** (scripted right-drag through wayvnc, yaw logged from
+  `workspace.CurrentCamera` via `print` in Studio's log): the same 20 px gave 18°, 43° or
+  84° in 4, 10 or 20 steps, and 40 one-pixel steps gave 328°. That is ~0.4° times the sum
+  of the distances from the anchor, i.e. quadratic in drag length.
+- **How the warp travels**: Kombucha's winex11 hides the cursor with XFixes around
+  `XWarpPointer` (its patch 0016), so Xwayland emulates the warp with a short-lived
+  `zwp_locked_pointer_v1` + cursor-position hint. labwc moves its cursor to the hint when
+  the lock goes away, but only if the hint's surface commit has been applied by then,
+  which it often isn't (wlroots applies it with the surface's buffered state). And while a
+  lock is up, labwc drops absolute motion altogether.
+- **Fix, two patches** in `config/pointer-warp/`, built from the distro's own sources by the
+  Dockerfile into `/usr/local/bin` (each patch's comment says what it changes):
+  - **Xwayland** (the main fix): for motion that arrives without relative motion (an
+    absolute-only device), once an X client has warped the pointer, apply the device's
+    movement since its previous event to where the warp left the pointer. Keep doing that
+    while a button is held, since a client may warp only once per several events. The
+    next event without a button held puts the pointer back under the viewer's.
+    Xwayland is the one place that sees the warps and the motion in order, so this has no
+    race.
+  - **labwc**: while the pointer is locked, send an absolute device's movement as relative
+    motion instead of dropping it. Studio's camera doesn't need this; a client that keeps
+    the cursor hidden (and so the lock up) did not move at all without it.
+- **Verified** with `research/upstream-reports/camprobe.c`, a Win32 stand-in for Studio's
+  camera: it sets a near-blank cursor, reads the distance from the anchor and warps back
+  on every move. It ran in a Wine virtual desktop on winex11, driven by `vncdotool`. The
+  table has the summed deltas it reported. It reads every move twice (seen in both builds,
+  cause not pinned down), so the patched column should be twice the drag:
+
+  | Drag | Stock | Patched |
+  |---|---|---|
+  | 40 px in 20 steps | 878 | 76 |
+  | 40 px in 4 steps | 230 | 70 |
+  | 400 px in 100 steps, 17 ms apart | 40796 | 792 |
+  | 400 px in 200 steps, 5 ms apart | 79994 | 798 |
+  | 400 px, cursor fully hidden (lock stays up) | 4 (pointer dead; stock labwc) | 792 |
+
+  After a drag, plain moves put the X pointer exactly under the viewer's pointer again
+  (`xdotool getmouselocation`). Re-measuring in Studio itself was cut short: the copied
+  test login was revoked (below), so the Studio numbers above are from before the fix only.
+- **Not covered**: a drag still ends at the edge of the viewer's window, since nothing
+  recentres the viewer's own pointer (that would need browser Pointer Lock in noVNC plus a
+  relative-motion RFB extension wayvnc doesn't have). And a client that warps the pointer
+  with no button held while several events land between two of its warps (a game's
+  mouse-look) gets one jump per such event.
+- **Escape hatch**: `VNC_POINTER_WARP_FIX=false` runs the distro builds
+  (`labwc-service.sh`). Upstream drafts: `research/upstream-reports/xwayland-absolute-motion-after-warp.md`,
+  `research/upstream-reports/labwc-locked-absolute-motion.md`.
+- **Copying `data/` into a second Studio container logs both out.** Roblox rotates the
+  OAuth refresh token on use and revokes the whole family when an old one is replayed:
+  the copy refreshed first, the original launched 30 s later with the old token and got
+  `invalid_grant: Token has been revoked`. A parallel test container needs its own login.
 
 ## Crash-loop bug: stale Wayland socket survives `docker restart` — fixed 2026-08-12
 
