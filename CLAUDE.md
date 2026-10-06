@@ -698,6 +698,11 @@ setup sidesteps it — a quick look at 11.19 on `winewayland.drv` was inconclusi
 main window stopped repainting, which may be its own problem). The record below is kept
 for the next time a bump breaks the viewport.
 
+**Moved again to `stable+20261005133651` on 2026-10-06** because upstream deleted
+`20261005101806` (Kombucha keeps only its newest release), so uncached builds failed at
+the download with a 404. Same Wine 11.19 and the same patch set: the only commit between
+the two builds is upstream's "ci: strip unneeded symbols".
+
 Roblox Studio's **3D viewport renders nothing** on Kombucha `stable+20260824153321`
 (**wine-11.16**). Everything else about Studio is fine: it launches, logs in, the ribbon
 and menus draw, a place opens (title bar, `RobloxIDEDoc::activate`, `SceneManager:

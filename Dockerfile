@@ -81,6 +81,10 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
 # XDG_SESSION_TYPE` comment below). Before moving it, open a place on the new build and
 # check the viewport renders and panels still dock.
 #
+# Kombucha deletes a release once a newer one is out (only one release exists at a time),
+# so this URL turns 404 soon after each upstream release and an uncached build fails at
+# the curl below - the pin then has to move even when nothing was wrong with it.
+#
 # Installed under /opt, NOT into Vinegar's own data directory: Vinegar manages
 # `~/.local/share/vinegar/kombucha*` itself and deletes a build there that isn't the one
 # it wants — observed 2026-08-28, pointing `wineroot` at a sibling directory made it
@@ -88,9 +92,9 @@ RUN curl -fsSL "https://github.com/vinegarhq/vinegar/archive/refs/tags/v${VINEGA
 # `wineroot` here, so moving this pin needs no config change on existing deployments.
 # The `wine --version` test makes a KOMBUCHA_VERSION bump fail the build loudly when the
 # tarball isn't the Wine it claims to be. KOMBUCHA_VERSION is URL-encoded (%2B for the
-# `+` in the real tag name, `stable+20261005101806`) because it appears in both the
+# `+` in the real tag name, `stable+20261005133651`) because it appears in both the
 # release tag and the asset filename, and GitHub serves neither unencoded.
-ARG KOMBUCHA_VERSION=stable%2B20261005101806
+ARG KOMBUCHA_VERSION=stable%2B20261005133651
 ARG KOMBUCHA_WINE_VERSION=wine-11.19
 RUN curl -fsSL "https://github.com/vinegarhq/kombucha/releases/download/${KOMBUCHA_VERSION}/kombucha-${KOMBUCHA_VERSION}.tar.xz" -o /tmp/kombucha.tar.xz \
     && mkdir -p /tmp/kombucha \
