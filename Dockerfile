@@ -224,7 +224,7 @@ RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh
 # Dockerfile, which does the same for the same reason.
 RUN mkdir -p /etc/roblox-studio/supervisord.d \
       /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog \
-      /var/log/dns-local /var/log/desktop-resize
+      /var/log/dns-local /var/log/desktop-resize /var/log/wine-owned-popups
 COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
 COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
 COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
@@ -238,6 +238,12 @@ COPY config/supervisor/dns-local-service.sh /etc/roblox-studio/dns-local-service
 COPY config/supervisor/desktop-size.sh /etc/roblox-studio/desktop-size.sh
 COPY config/supervisor/desktop-resize-service.sh /etc/roblox-studio/desktop-resize-service.sh
 COPY --from=desktop-resize-build /src/desktop-resize.exe /usr/local/lib/roblox-studio/desktop-resize.exe
+COPY config/supervisor/wine-owned-popups-service.sh /etc/roblox-studio/wine-owned-popups-service.sh
+# Built here rather than in a separate stage: gcc (base-devel) and libX11 are already in
+# this image. What it does and why: its own header comment.
+COPY config/wine-owned-popups/wine-owned-popups.c /tmp/wine-owned-popups.c
+RUN gcc -O2 -Wall -Wextra -Werror -o /usr/local/bin/wine-owned-popups /tmp/wine-owned-popups.c -lX11 \
+    && rm /tmp/wine-owned-popups.c
 RUN chmod +x /etc/roblox-studio/*-service.sh
 
 # qwreey/router-docker-client's own subdirectories, fetched directly at build
