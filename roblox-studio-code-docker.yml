@@ -51,13 +51,11 @@ services:
       # 알 수 있게(예전 이름 vnc-only는 대상이 하나뿐이라고 가정한 이름이었다).
       VNC_BIND_ALIAS: roblox-studio-vnc
     networks:
-      # code-docker-internal에 붙이는 것만으로 코드가 뭔가 자동으로 되는 건 없다 -
-      # 이 네트워크 위에서 code-docker 쪽 에이전트 컨테이너가 실제로 Studio MCP
-      # 브리지(SETUP.md의 "Studio MCP over the network")나 HTTPService를 호출하게
-      # 배선하는 건 여전히 별도의, 아직 안 된 작업이다 (CLAUDE.md의 "Future
-      # code-docker integration" 절 참고) - 이 파일은 그 작업이 가능해지도록 네트워크
-      # 경로만 미리 열어두는 것.
-      code-docker-internal: {}
+      # code-docker-internal에는 붙지 않는다. 플러그인이나 스크립트가 HttpService로
+      # 임의 요청을 보낼 수 있는 컨테이너라, 거기 붙으면 code-docker의 nginx(로그인 없는
+      # code-server, webmanager)와 dind:2375가 그대로 닿는다(실측 2026-10-06). 전용망에만
+      # 두고, 오가야 하는 포트만 아래 studio-front가 넘겨준다.
+      roblox-studio-net: {}
       # VNC 전용, agent 컨테이너(code-docker/dind)는 못 붙는 격리망 - 아래
       # networks.roblox-studio-vnc 정의 참고.
       roblox-studio-vnc:
@@ -116,9 +114,54 @@ services:
   # VNC(5900)를 host에 안전하게 중계할 수 있다 - 실제 forward 항목(host_port ->
   # roblox-studio-vnc:5900) 추가는 컴포즈 파일이 아니라 router-manager의 Net 관리
   # 탭/API(/api/netgate/forwards)에서 런타임에 하는 것 - docs/router.md 참고.
+  #
+  # roblox-studio-net에는 router가 게이트웨이로도 붙는다: netinit.gateway가 가리키는
+  # 컨테이너는 같은 망에 있어야 default route가 될 수 있고, Studio의 dns-local이 두 번째
+  # 업스트림으로 router를 ROUTER_HOSTNAME 별칭으로 찾는다. router 앞문(tcp 80)은
+  # 바깥쪽 인터페이스에서만 받으므로 이 망에서 code-server로 돌아가는 길이 되지 않는다.
   code-docker-router:
     networks:
-      - roblox-studio-vnc
+      roblox-studio-vnc: {}
+      roblox-studio-net:
+        aliases:
+          - "${ROUTER_HOSTNAME:-router}"
+
+  # 두 망 사이의 유일한 다리. 무엇을 넘기는지와 이유는 config/studio-front/entrypoint.sh.
+  studio-front:
+    # nginx-unprivileged: 1024 미만 포트도, root에서 내려가는 단계도 없어서 아래
+    # cap_drop: ALL이 그대로 유지된다(code-docker-firecrawl의 firecrawl-front와 같은 이유).
+    image: "nginxinc/nginx-unprivileged:1.27-alpine"
+    container_name: "${PREFIX:-}roblox-studio-front"
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/studio-front/entrypoint.sh"]
+    environment:
+      # <컨테이너>.<망> 형태 - 이 컨테이너 자신이 "studio"/"code-docker" 별칭을 갖고
+      # 있어서 맨 이름은 자기 자신으로 풀릴 수 있다.
+      STUDIO_UPSTREAM: "${PREFIX:-}roblox-studio.${PREFIX:-}roblox-studio-net"
+      CODE_DOCKER_UPSTREAM: "${PREFIX:-}code-docker.${PREFIX:-}code-docker-internal"
+      # Studio가 code-docker 쪽으로 열 수 있는 포트. 기본값은 rojo serve 10개(에이전트마다
+      # 하나씩 띄울 수 있게)와 luau-lsp Studio 플러그인 포트.
+      STUDIO_CODE_DOCKER_PORTS: "${STUDIO_CODE_DOCKER_PORTS:-34872-34881 3667}"
+    volumes:
+      - "./config/studio-front:/studio-front:ro"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      # code-docker는 예전처럼 studio:8787로 MCP에 붙는다 - 그 이름이 이제 이 컨테이너다.
+      code-docker-internal:
+        aliases:
+          - studio
+      # Studio 쪽 Rojo/luau-lsp 플러그인 설정의 호스트명(code-docker)이 그대로 통한다.
+      roblox-studio-net:
+        aliases:
+          - code-docker
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
 
 networks:
   # agent 컨테이너(code-docker/dind)는 절대 못 붙는, VNC 전용 격리망 - router만
@@ -154,4 +197,14 @@ networks:
     # 삼지 않는다.
     labels:
       netinit.provider: "${PREFIX:-}code-docker-netinit-docker"
+      netinit.exempt-forward: "true"
+  # Studio의 작업망. Studio, router(게이트웨이), studio-front만 붙는다 - code-docker와
+  # dind는 이 망에 없어서 Studio에서 그쪽으로 가는 길은 studio-front가 넘겨주는 포트뿐이다.
+  # 외부 egress는 code-docker-internal과 똑같이 router의 netgate를 거친다.
+  roblox-studio-net:
+    name: "${PREFIX:-}roblox-studio-net"
+    internal: true
+    labels:
+      netinit.provider: "${PREFIX:-}code-docker-netinit-docker"
+      netinit.gateway: "${PREFIX:-}code-docker-router"
       netinit.exempt-forward: "true"

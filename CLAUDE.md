@@ -1028,17 +1028,56 @@ root was unreferenced by any compose file and has been deleted (2026-08-25).
 
 **`MCP_PORT` is not host-published once integrated with code-docker, and that's
 correct, not a gap (owner decision, 2026-08-18).** In this topology `studio` ends up
-with zero non-internal networks (`code-docker-internal` and `roblox-studio-vnc` are
+with zero non-internal networks (`roblox-studio-net` and `roblox-studio-vnc` are
 both `internal: true`), so Docker silently skips the host-publish DNAT for `MCP_PORT`
 even before Phase 2 existed — confirmed live: connecting to the container's own IP on
 8787 works, `127.0.0.1:8787` on the host doesn't. This doesn't matter because the
 actual intended consumption path was never host-publish in the first place — it's
-code-docker's own agent container reaching `studio:8787` directly over
-`code-docker-internal` (confirmed reachable in the same 2026-08-18 test). If MCP
+code-docker's own agent container reaching `studio:8787` over `code-docker-internal`
+(confirmed reachable in the same 2026-08-18 test; since 2026-10-06 that name is
+`studio-front`, see "Studio's own network" below). If MCP
 access from *outside* code-docker is ever needed, wire it the same way as VNC —
 `code-docker-router`'s netgate `forwards:` or Dev Proxy/App Routes — rather than
 reviving host-publish, to stay consistent with this project's "only router crosses
 the border" principle.
+
+## Studio's own network: `roblox-studio-net` + `studio-front` — 2026-10-06
+
+With code-docker, `studio` is **not** on `code-docker-internal` any more (it was from
+Phase 1 until 2026-10-06; the sections above describe that era). It sits on its own
+`internal: true` network, `roblox-studio-net`, with only `code-docker-router` (the
+network's `netinit.gateway`, and dns-local's second upstream under `ROUTER_HOSTNAME`)
+and `studio-front`.
+
+- **Why.** Studio sends arbitrary HTTP through `HttpService` (any plugin, any script the
+  agent runs, a Toolbox model's plugin), with headers it chooses, so browser-style
+  Origin/CSRF checks don't apply. On `code-docker-internal` that reached code-docker's
+  nginx (code-server with `auth: none`, webmanager whose login is opt-in) and dind's
+  unauthenticated `:2375`. Measured 2026-10-06 from a container on that network:
+  `code-docker/` 302, `/manager/api/terminal/sessions` 200.
+- **`studio-front`** (`config/studio-front/entrypoint.sh`) is the only container on
+  both networks. It's an nginx `stream` (plain TCP) forwarder, so HTTP and WebSocket
+  pass untouched:
+  - code-docker → `studio:8787` (MCP; Caddy still checks the token). `studio` is
+    `studio-front`'s alias on `code-docker-internal`.
+  - Studio → `code-docker:<STUDIO_CODE_DOCKER_PORTS>` (default `34872-34881 3667`:
+    `rojo serve` and luau-lsp's Studio plugin). `code-docker` is `studio-front`'s alias
+    on `roblox-studio-net`, so plugin host settings keep saying `code-docker`. The
+    server on the code-docker side has to bind a non-loopback address
+    (`rojo serve --address 0.0.0.0`).
+  - Upstreams are network-qualified (`<container>.<network>`, which Docker's DNS
+    answers), because a bare `studio`/`code-docker` could resolve to `studio-front`
+    itself.
+- **Measured on the test stack, from inside `studio`, 2026-10-06:**
+  - `code-docker:80`, `:82`, and `router:80` were refused.
+  - code-docker's and dind's `code-docker-internal` IPs timed out, because router drops
+    the forward.
+  - A listener on `code-docker:34875` answered 200, and the internet was reachable.
+  - From code-docker, `studio:8787` reached a test listener inside `studio`.
+  - router still reached `roblox-studio-vnc:6080`.
+- **Chrome has the same problem.** code-docker-chrome's
+  `.claude/backlog/next-pass-plan.md` §3 plans the same split. Its reverse direction is
+  dev servers on arbitrary ports, not a fixed list.
 
 ## Studio MCP bridge — built and verified end-to-end, 2026-08-13
 
