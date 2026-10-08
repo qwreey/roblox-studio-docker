@@ -50,9 +50,10 @@ docker exec roblox-studio bash -c '
 '
 ```
 
-`DISPLAY=:0` (labwc's XWayland) is not optional: without it Wine falls back to its
-Wayland driver, which ignores Studio's virtual desktop — Studio still opens, but its
-panels can't be docked or resized again (see "Once connected" below).
+`DISPLAY=:0` (labwc's XWayland) is also the image's own default (see the Dockerfile's
+`ENV DISPLAY`); without it Wine falls back to its Wayland driver, which ignores Studio's
+virtual desktop — a black screen, the Windows-style taskbar halfway up it, and panels
+that can't be docked or resized again (see "Once connected" below).
 
 ## Connecting with a real VNC client
 

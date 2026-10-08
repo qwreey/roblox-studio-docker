@@ -212,6 +212,14 @@ COPY --from=winex11-build /out/winex11.so /opt/kombucha-pinned/lib/wine/x86_64-u
 # winewayland - which can't do Studio's virtual desktop. An image ENV rather than an
 # entrypoint.sh export so a `docker exec` launch and the MCP bridge's Wine get it too.
 ENV XDG_SESSION_TYPE=wayland
+# labwc's XWayland, always :0 (entrypoint.sh clears the stale locks that pushed it to :1).
+# Without DISPLAY Wine also falls back to winewayland, which ignores the virtual desktop:
+# a black screen, Kombucha's taskbar mid-screen, Studio as its own window beside it. Set
+# here rather than left to labwc's children, because Studio is often not one of them:
+# a browser deeplink (the "Login via Browser" callback, "Edit in Studio") starts Vinegar
+# from xdg-desktop-portal, which dbus-daemon activates with only its own environment, and
+# a `docker exec` launch gets only this image's.
+ENV DISPLAY=:0
 
 # noVNC + websockify — see CLAUDE.md's "VNC embedding" section. wayvnc itself stays raw
 # RFB-only on VNC_PORT (unchanged, still the right choice for native clients like
