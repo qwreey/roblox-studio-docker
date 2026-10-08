@@ -125,12 +125,11 @@
      struct xorg_list tablet_pads;
 --- a/hw/xwayland/xwayland-screen.c
 +++ b/hw/xwayland/xwayland-screen.c
-@@ -304,6 +304,9 @@
+@@ -307,6 +307,8 @@
      if (!xwl_seat)
-         xwl_seat = xwl_screen_get_default_seat(xwl_screen);
+         return;
  
-+    if (xwl_seat)
-+        xwl_seat->abs_motion.warped = TRUE;
++    xwl_seat->abs_motion.warped = TRUE;
 +
      if (!window)
          window = XYToWindow(sprite, x, y);
