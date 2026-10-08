@@ -1,14 +1,15 @@
 --- a/hw/xwayland/xwayland-input.c
 +++ b/hw/xwayland/xwayland-input.c
-@@ -546,6 +546,7 @@
+@@ -546,6 +546,8 @@
      xwl_seat->pointer_enter_serial = serial;
  
      xwl_seat->focus_window = wl_surface_get_user_data(surface);
 +    xwl_seat->abs_motion.valid = FALSE;
++    xwl_seat->abs_motion.buttons = 0;
      dx = xwl_seat->focus_window->toplevel->drawable.x;
      dy = xwl_seat->focus_window->toplevel->drawable.y;
  
-@@ -662,6 +663,75 @@
+@@ -662,6 +664,82 @@
                                              dx_unaccel, dy_unaccel);
  }
  
@@ -27,12 +28,19 @@
 + * doing so while a button is held, since the client may warp only once
 + * for several events.  The first event after that takes the device's own
 + * position again.
++ *
++ * "Held" is abs_motion.buttons, kept from the wl_pointer button events
++ * themselves.  The device's buttonsDown read 0 here all through a drag
++ * (buttons are queued on get_pointer_device(), not necessarily this device,
++ * and processed later), so a drag started without moving since the
++ * previous one - after a release whose motion event used up the warp -
++ * began with a jump from the client's anchor to the viewer's pointer.
 + */
 +static void
 +xwl_seat_follow_client_warp(struct xwl_seat *xwl_seat, int *x, int *y)
 +{
 +    DeviceIntPtr dev = xwl_seat->pointer;
-+    Bool held = dev->button && dev->button->buttonsDown > 0;
++    Bool held = xwl_seat->abs_motion.buttons != 0;
 +    int dx = *x - xwl_seat->abs_motion.last_x;
 +    int dy = *y - xwl_seat->abs_motion.last_y;
 +    int cx, cy;
@@ -84,7 +92,7 @@
  static void
  dispatch_absolute_motion(struct xwl_seat *xwl_seat)
  {
-@@ -685,6 +755,9 @@
+@@ -685,6 +763,9 @@
      x = drawable_x + event_x;
      y = drawable_y + event_y;
  
@@ -94,7 +102,7 @@
      valuator_mask_zero(&mask);
      valuator_mask_set(&mask, 0, x);
      valuator_mask_set(&mask, 1, y);
-@@ -764,6 +837,9 @@
+@@ -764,6 +845,9 @@
      Bool has_relative = xwl_seat->pending_pointer_event.has_relative;
      Bool has_absolute = xwl_seat->pending_pointer_event.has_absolute;
  
@@ -104,9 +112,21 @@
      if (xwl_seat->pointer_warp_emulator && has_relative) {
          dispatch_relative_motion_with_warp(xwl_seat);
      } else {
+@@ -832,6 +916,11 @@
+         break;
+     }
+ 
++    if (state)
++        xwl_seat->abs_motion.buttons |= 1u << (index & 31);
++    else
++        xwl_seat->abs_motion.buttons &= ~(1u << (index & 31));
++
+     valuator_mask_zero(&mask);
+     QueuePointerEvents(get_pointer_device(xwl_seat),
+                        state ? ButtonPress : ButtonRelease, index, 0, &mask);
 --- a/hw/xwayland/xwayland-input.h
 +++ b/hw/xwayland/xwayland-input.h
-@@ -123,6 +123,16 @@
+@@ -123,6 +123,17 @@
          Bool has_horizontal_scroll_v120;
      } pending_pointer_event;
  
@@ -118,6 +138,7 @@
 +        int last_y;
 +        Bool warped;    /* a client warped the pointer since that event */
 +        Bool relative;  /* that event was applied relative to a warp */
++        uint32_t buttons; /* held buttons, by X button number */
 +    } abs_motion;
 +
      struct xorg_list tablets;

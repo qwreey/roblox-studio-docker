@@ -32,6 +32,10 @@ no `zwp_relative_pointer_v1` motion (an absolute-only device), remember the last
 Once a client has warped (`CursorWarpedTo`), apply the device's movement since that
 position to the sprite's current (warped) position instead of using the absolute position.
 Keep doing so while a button is held, and resync on the next frame without a button held.
+"Held" has to come from the `wl_pointer.button` events themselves: the device's
+`buttonsDown` read 0 throughout a drag at that point (buttons are queued on
+`get_pointer_device()` and processed later), which let a drag started without moving
+since the previous release begin with a jump to the viewer's position.
 Relative-only frames (sent while a lock is up) advance the remembered position, and a
 frame with both kinds of motion marks the device as relative and turns this off. With
 it, the same drags sum to N regardless of step count, and the pointer is back under the

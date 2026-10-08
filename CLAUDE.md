@@ -541,6 +541,12 @@ one move.
   - With all three patches, 40 px gave -16° in 4, 10, 20 and 40 steps alike, and 400 px
     in 100 steps gave -160°. That is 0.4° per pixel whatever the step count; two runs
     gave the same numbers.
+  - A second drag started without moving after the first one's release (re-measured on
+    Xwayland 24.1.14 with yaw read over MCP) came out 16° or more too far in some runs:
+    the release's own motion event used up the warp, and "a button is held" read the
+    device's `buttonsDown`, which is still 0 at that point. The patch now tracks held
+    buttons from the `wl_pointer.button` events: two 40 px drags gave -32° in 10 of 10
+    runs (3 of 6 wrong before).
 - **Not covered**: a drag still ends at the edge of the viewer's window, since nothing
   recentres the viewer's own pointer (that would need browser Pointer Lock in noVNC plus a
   relative-motion RFB extension wayvnc doesn't have). And a client that warps the pointer
