@@ -1426,6 +1426,14 @@ touching again:
   logged immediately on startup is just that self-connect racing its own listener binding
   and retrying ~1.4s later, not a real failure.
 
+**A StudioMCP.exe that outlives sessions.** The bridge starts one StudioMCP.exe per client
+session; the first to bind 127.0.0.1:13469 is what Studio connects to, the rest go through
+it. Between sessions nothing listened, so Studio showed "no client" and a new session's
+first `list_roblox_studios` came back empty (Studio retries every 3 s) - which agents read
+as "no place open". `studio-mcp-host` (config/supervisor/studio-mcp-host-service.sh) keeps
+one running with a stdin that never ends, restarts it when it exits and when a Studio
+update replaces the exe. Off with the bridge (no `MCP_TOKEN`).
+
 **Shared-Studio notice (2026-10-06).** Several agents can use one Studio through the
 bridge at once, and Studio's MCP doesn't say so. `studio-mcp-stdio.sh` runs StudioMCP.exe
 under `mcp-shared-notice.py`, which appends `mcp-shared-notice.md` to the `instructions`

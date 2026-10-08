@@ -351,7 +351,8 @@ RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh /us
 # Dockerfile, which does the same for the same reason.
 RUN mkdir -p /etc/roblox-studio/supervisord.d \
       /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog \
-      /var/log/dns-local /var/log/desktop-resize /var/log/wine-owned-popups /var/log/studio-plugins /var/log/studio-output
+      /var/log/dns-local /var/log/desktop-resize /var/log/wine-owned-popups /var/log/studio-plugins /var/log/studio-output \
+      /var/log/studio-mcp-host
 COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
 COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
 COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
@@ -360,6 +361,7 @@ COPY config/supervisor/labwc-service.sh /etc/roblox-studio/labwc-service.sh
 COPY config/supervisor/wayvnc-service.sh /etc/roblox-studio/wayvnc-service.sh
 COPY config/supervisor/novnc-service.sh /etc/roblox-studio/novnc-service.sh
 COPY config/supervisor/mcp-bridge-service.sh /etc/roblox-studio/mcp-bridge-service.sh
+COPY config/supervisor/studio-mcp-host-service.sh /etc/roblox-studio/studio-mcp-host-service.sh
 COPY config/supervisor/critical-watchdog-service.sh /etc/roblox-studio/critical-watchdog-service.sh
 COPY config/supervisor/dns-local-service.sh /etc/roblox-studio/dns-local-service.sh
 COPY config/supervisor/studio-wine.sh /etc/roblox-studio/studio-wine.sh
