@@ -19,14 +19,15 @@
 
 #define MAX_MAXIMIZED 64
 
-/* A maximized window overhangs the work area by its frame; kept per window so it can be
- * re-fitted to the new work area with SetWindowPos. ShowWindow(SW_MAXIMIZE) would do it
- * too, but activates the window - stealing focus from whatever had it on every resize,
- * and raising Studio's main window over its floating panels. */
+/* A maximized window overhangs the work area by its sizing border, the same on every side;
+ * kept per window so it can be re-fitted to the new work area with SetWindowPos.
+ * ShowWindow(SW_MAXIMIZE) would do it too, but activates the window - stealing focus from
+ * whatever had it on every resize, and raising Studio's main window over its floating
+ * panels. */
 struct maximized
 {
     HWND hwnd;
-    RECT overhang;
+    LONG border;
 };
 
 static struct maximized maximized[MAX_MAXIMIZED];
@@ -41,8 +42,11 @@ static BOOL CALLBACK record_maximized(HWND hwnd, LPARAM lparam)
     if (maximized_count == MAX_MAXIMIZED) return FALSE;
     if (!IsWindowVisible(hwnd) || !IsZoomed(hwnd) || !GetWindowRect(hwnd, &rc)) return TRUE;
     maximized[maximized_count].hwnd = hwnd;
-    SetRect(&maximized[maximized_count].overhang, work->left - rc.left, work->top - rc.top,
-            rc.right - work->right, rc.bottom - work->bottom);
+    /* Measured on the left edge only. The shell hands the taskbar's strip back to the work
+     * area some time after a resize, so a window maximized before that ends a taskbar's
+     * height above the current work area's bottom - taken as an overhang, that height came
+     * back as a gap under the window on every later resize. */
+    maximized[maximized_count].border = max(0, work->left - rc.left);
     maximized_count++;
     return TRUE;
 }
@@ -69,11 +73,10 @@ static void refit(const RECT *work)
 {
     for (int i = 0; i < maximized_count; i++)
     {
-        const RECT *o = &maximized[i].overhang;
+        LONG b = maximized[i].border;
         if (!IsWindow(maximized[i].hwnd) || !IsZoomed(maximized[i].hwnd)) continue;
-        SetWindowPos(maximized[i].hwnd, NULL, work->left - o->left, work->top - o->top,
-                     (work->right + o->right) - (work->left - o->left),
-                     (work->bottom + o->bottom) - (work->top - o->top),
+        SetWindowPos(maximized[i].hwnd, NULL, work->left - b, work->top - b,
+                     work->right - work->left + 2 * b, work->bottom - work->top + 2 * b,
                      SWP_NOZORDER | SWP_NOACTIVATE);
     }
     EnumWindows(pull_in, (LPARAM)work);
