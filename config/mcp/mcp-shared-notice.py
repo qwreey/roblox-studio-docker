@@ -83,10 +83,13 @@ def answer_rojo_call(line: bytes, rojo_guide: str) -> bool:
     params = message.get("params")
     if not isinstance(params, dict) or params.get("name") != ROJO_TOOL["name"]:
         return False
+    # resultType is required from servers on protocol revision 2026-07-28, which
+    # StudioMCP.exe can negotiate (Claude Code rejected the result without it); clients
+    # on earlier revisions ignore it.
     write_out(encode({
         "jsonrpc": "2.0",
         "id": message["id"],
-        "result": {"content": [{"type": "text", "text": rojo_guide}], "isError": False},
+        "result": {"content": [{"type": "text", "text": rojo_guide}], "isError": False, "resultType": "complete"},
     }))
     return True
 
