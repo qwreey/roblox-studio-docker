@@ -120,5 +120,20 @@ if [[ ! -f "${virtual_desktop_marker}" ]]; then
   touch "${virtual_desktop_marker}"
 fi
 
+# The virtual desktop above only exists under winex11. A Graphics value under
+# HKCU\Software\Wine\Drivers (say "wayland", left from an experiment) makes Wine skip
+# winex11 whatever DISPLAY says: a black screen, Kombucha's taskbar mid-screen, Studio's
+# viewport blank. Dropped here, before any Wine runs, so wineserver isn't holding the
+# file; with no value Wine tries x11 first.
+studio_user_reg="${STUDIO_WINEPREFIX}/user.reg"
+# Section headers in user.reg spell each backslash twice: [Software\\Wine\\Drivers] <time>.
+drivers_graphics='/^\[/ { in_sec = (index($0, "[Software\\\\Wine\\\\Drivers] ") == 1) }'
+graphics_value="$(awk "${drivers_graphics}"' in_sec && /^"Graphics"=/' "${studio_user_reg}" 2>/dev/null || true)"
+if [[ -n "${graphics_value}" ]]; then
+  awk "${drivers_graphics}"' !(in_sec && /^"Graphics"=/)' "${studio_user_reg}" > "${studio_user_reg}.tmp" \
+    && mv "${studio_user_reg}.tmp" "${studio_user_reg}"
+  echo "[entrypoint] removed Wine's ${graphics_value} driver override from Studio's prefix - Studio's desktop needs winex11"
+fi
+
 echo "[entrypoint] handing off to supervisord"
 exec supervisord -n -c /etc/roblox-studio/supervisord.conf

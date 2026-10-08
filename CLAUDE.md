@@ -415,7 +415,9 @@ virtual desktop filling the screen above waybar. Each piece is load-bearing:
   keeps a present, non-empty value in step with the screen from then on. Wine needs
   `DISPLAY=:0`, or winex11 has no display and Wine falls back to winewayland; the image
   sets it (`ENV DISPLAY`), because a Studio started by a browser deeplink through
-  xdg-desktop-portal or by `docker exec` isn't a labwc child and never got labwc's. `entrypoint.sh` also clears
+  xdg-desktop-portal or by `docker exec` isn't a labwc child and never got labwc's. A `Graphics` value under the prefix's
+  `HKCU\Software\Wine\Drivers` forces a driver regardless of `DISPLAY`;
+  `entrypoint.sh` drops one on every start. `entrypoint.sh` also clears
   stale `/tmp/.X*-lock` files, which `docker restart` keeps and which pushed XWayland to
   `:1`, `:2`, ...
 
