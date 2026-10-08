@@ -341,6 +341,7 @@ COPY config/mcp/mcp-bridge.sh /usr/local/bin/mcp-bridge.sh
 COPY config/mcp/studio-mcp-stdio.sh /usr/local/bin/studio-mcp-stdio.sh
 COPY config/mcp/mcp-shared-notice.py /usr/local/bin/mcp-shared-notice.py
 COPY config/mcp/mcp-shared-notice.md /etc/mcp-bridge/mcp-shared-notice.md
+COPY config/mcp/rojo-sync-guide.md /etc/mcp-bridge/rojo-sync-guide.md
 RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh /usr/local/bin/mcp-shared-notice.py
 
 # Process supervision: supervisord — see CLAUDE.md's "Process supervision: supervisord"

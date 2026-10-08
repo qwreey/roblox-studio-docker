@@ -1445,7 +1445,13 @@ bridge at once, and Studio's MCP doesn't say so. `studio-mcp-stdio.sh` runs Stud
 under `mcp-shared-notice.py`, which appends `mcp-shared-notice.md` to the `instructions`
 field of the `initialize` response. The note's convention is an `AgentOwner` attribute on
 each agent's own root, and the agent checks it before touching an instance. Every other
-message passes through unchanged.
+message passes through unchanged, except one addition:
+
+- **`rojo_sync_guide`, a tool the wrapper adds to `tools/list`** and answers itself with
+  `rojo-sync-guide.md` (Studio never sees the call). The notice already pointed at
+  `studio-sync`, yet an agent asked about Rojo answered that its MCP tools had nothing on
+  it - an agent looks through its tools for how to do something, and Claude Code finds
+  MCP tools by keyword search.
 
 - **Why an attribute:** it lives in the place and is visible to every agent and to MCP
   tools. Writing it into a Rojo `project.json` was rejected: that file is the real,
