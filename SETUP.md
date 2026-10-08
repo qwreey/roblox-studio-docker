@@ -301,7 +301,7 @@ system prompt).
 
 > **Running alongside code-docker?** The address is `http://studio:8787/mcp` instead —
 > `MCP_PORT` is not host-published in that mode (see the security notes below), and the
-> client is code-docker's own agent container, reaching the bridge through `studio-front`
+> client is code-docker's own agent container, reaching the bridge through `roblox-studio-front`
 > (the one container on both `code-docker-internal` and Studio's own network - see
 > CLAUDE.md's "Studio's own network"). code-docker's own
 > [`docs/tips/roblox-studio.md`](https://github.com/qwreey/code-docker/blob/HEAD/docs/tips/roblox-studio.md)
@@ -348,7 +348,7 @@ system prompt).
   mode. When run *with* code-docker instead (`roblox-studio-code-docker.yml`, see
   CLAUDE.md's "MCP_PORT is not host-published once integrated with code-docker" note),
   `MCP_PORT` is intentionally not published at all — code-docker's own agent container
-  reaches the bridge through `studio-front` instead, and outside access (if
+  reaches the bridge through `roblox-studio-front` instead, and outside access (if
   ever needed) goes through `code-docker-router`, not a host-published port.
 
 ## Syncing a Rojo project from code-docker (`studio-sync`)
@@ -371,7 +371,7 @@ studio-sync --release           # clear this owner's AgentOwner marks (instances
   loads it the next time it starts.
 - Ports 34880-34881 are reserved for it. Ordinary `rojo serve` for live sync still works
   on 34872-34879: bind it with `--address 0.0.0.0`, and set Rojo's plugin host in Studio
-  to `studio-front`, which forwards to code-docker.
+  to `roblox-studio-front`, which forwards to code-docker.
 - How it works and what was measured: CLAUDE.md's "studio-sync".
 
 ## Studio's Output from code-docker (`studio-output`)

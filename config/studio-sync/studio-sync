@@ -9,7 +9,7 @@ initial sync, and reports back here. Nothing in the repository is written.
 Every sync uses the same two ports, 34880 for `rojo serve` and 34881 for the reply, so
 the plugin only has to watch one port (each probe of a closed port adds a few lines to
 Studio's log). Concurrent runs queue on the reply port: whoever binds it goes next.
-Both are in the range studio-front forwards from Studio (STUDIO_CODE_DOCKER_PORTS);
+Both are in the range roblox-studio-front forwards from Studio (STUDIO_CODE_DOCKER_PORTS);
 34872-34879 stay free for ordinary `rojo serve`.
 
 Instances the sync owns get an AgentOwner attribute; a sync that would change another

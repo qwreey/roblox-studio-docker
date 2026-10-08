@@ -2,7 +2,7 @@
 	studio-sync: one-shot Rojo syncs requested from outside Studio.
 
 	Built into a plugin next to an unmodified copy of Rojo's own plugin modules (see
-	build.sh); this script replaces Rojo's UI entry point. It polls one port on code-docker (through studio-front)
+	build.sh); this script replaces Rojo's UI entry point. It polls one port on code-docker (through roblox-studio-front)
 	for a `rojo serve` whose project name is a studio-sync request
 	(`studio-sync owner=<name> reply=<port>`, written by the studio-sync CLI), then:
 
@@ -35,8 +35,8 @@ local Http = require(Rojo.Packages.Http)
 local ApiContext = require(Rojo.Plugin.ApiContext)
 local ServeSession = require(Rojo.Plugin.ServeSession)
 
--- code-docker as seen from Studio's network: studio-front forwards these ports to it.
-local HOST = "studio-front"
+-- code-docker as seen from Studio's network: roblox-studio-front forwards these ports to it.
+local HOST = "roblox-studio-front"
 -- studio-sync's fixed serve port. One port, not a range: every probe of a closed port
 -- costs a few lines in Studio's log, and concurrent syncs queue on the CLI side anyway.
 local PORT = 34880

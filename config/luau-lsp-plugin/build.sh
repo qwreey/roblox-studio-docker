@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Builds LuauLSP.rbxm: luau-lsp's own Studio plugin at LUAU_LSP_REF with
-# studio-defaults.patch applied - default host studio-front (Studio's way to code-docker,
+# studio-defaults.patch applied - default host roblox-studio-front (Studio's way to code-docker,
 # where VS Code's luau-lsp extension listens on 3667), startAutomatically on, and a retry
 # every 10 s while not connected, since the language server only exists while a VS Code
 # window is open. `--fuzz=0`: a release that moves this code fails the build instead of

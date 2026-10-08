@@ -1149,19 +1149,19 @@ even before Phase 2 existed — confirmed live: connecting to the container's ow
 actual intended consumption path was never host-publish in the first place — it's
 code-docker's own agent container reaching `studio:8787` over `code-docker-internal`
 (confirmed reachable in the same 2026-08-18 test; since 2026-10-06 that name is
-`studio-front`, see "Studio's own network" below). If MCP
+`roblox-studio-front`, see "Studio's own network" below). If MCP
 access from *outside* code-docker is ever needed, wire it the same way as VNC —
 `code-docker-router`'s netgate `forwards:` or Dev Proxy/App Routes — rather than
 reviving host-publish, to stay consistent with this project's "only router crosses
 the border" principle.
 
-## Studio's own network: `roblox-studio-net` + `studio-front` — 2026-10-06
+## Studio's own network: `roblox-studio-net` + `roblox-studio-front` — 2026-10-06
 
 With code-docker, `studio` is **not** on `code-docker-internal` any more (it was from
 Phase 1 until 2026-10-06; the sections above describe that era). It sits on its own
 `internal: true` network, `roblox-studio-net`, with only `code-docker-router` (the
 network's `netinit.gateway`, and dns-local's second upstream under `ROUTER_HOSTNAME`)
-and `studio-front`.
+and `roblox-studio-front`.
 
 - **Why.** Studio sends arbitrary HTTP through `HttpService` (any plugin, any script the
   agent runs, a Toolbox model's plugin), with headers it chooses, so browser-style
@@ -1169,28 +1169,32 @@ and `studio-front`.
   nginx (code-server with `auth: none`, webmanager whose login is opt-in) and dind's
   unauthenticated `:2375`. Measured 2026-10-06 from a container on that network:
   `code-docker/` 302, `/manager/api/terminal/sessions` 200.
-- **`studio-front`** (`config/studio-front/entrypoint.sh`) is the only container on
-  both networks. It's an nginx `stream` (plain TCP) forwarder, so HTTP and WebSocket
+- **`roblox-studio-front`** (`config/roblox-studio-front/entrypoint.sh`) is the only container on
+  both networks. Named like `roblox-studio-vnc` (chrome's pair is `chrome-front`/`chrome-vnc`);
+  both networks are shared with router and other siblings, where a bare `studio-*` could
+  clash. The compose service key is still `studio-front`: renaming it orphans the old
+  container, whose `container_name` then makes a plain `up -d` fail with a name conflict
+  (measured). It's an nginx `stream` (plain TCP) forwarder, so HTTP and WebSocket
   pass untouched:
   - code-docker → `studio:8787` (MCP; Caddy still checks the token). `studio` is
-    `studio-front`'s alias on `code-docker-internal`.
-  - Studio → `studio-front:<STUDIO_CODE_DOCKER_PORTS>` → code-docker (default
+    `roblox-studio-front`'s alias on `code-docker-internal`.
+  - Studio → `roblox-studio-front:<STUDIO_CODE_DOCKER_PORTS>` → code-docker (default
     `34872-34881 3667`: 34872-34879 for ordinary `rojo serve`, 34880-34881 for
     studio-sync, 3667 for luau-lsp's Studio plugin). Plugins in Studio are pointed at
-    host `studio-front`. The server on the code-docker side has to bind a non-loopback
+    host `roblox-studio-front`. The server on the code-docker side has to bind a non-loopback
     address (`rojo serve --address 0.0.0.0`).
   - **No `code-docker` alias on `roblox-studio-net`.** That would keep plugin host
     settings unchanged, but router joins this network too. router's own upstreams say
     `code-docker:80`, and Docker answers a multi-network container's lookup from only
-    one of its networks. So a bare `code-docker` there could resolve to studio-front,
+    one of its networks. So a bare `code-docker` there could resolve to roblox-studio-front,
     which doesn't serve :80.
   - Upstreams are network-qualified (`<container>.<network>`, which Docker's DNS
-    answers), because a bare `studio` could resolve to `studio-front` itself.
+    answers), because a bare `studio` could resolve to `roblox-studio-front` itself.
 - **Measured on the test stack, from inside `studio`, 2026-10-06:**
   - `code-docker:80`, `:82`, and `router:80` were refused.
   - code-docker's and dind's `code-docker-internal` IPs timed out, because router drops
     the forward.
-  - A listener on code-docker's :34875, reached through studio-front, answered 200, and
+  - A listener on code-docker's :34875, reached through roblox-studio-front, answered 200, and
     the internet was reachable.
   - From code-docker, `studio:8787` reached a test listener inside `studio`.
   - router still reached `roblox-studio-vnc:6080`.
@@ -1204,14 +1208,14 @@ luau-lsp's VS Code extension can complete `game.Workspace.Foo...` from the live
 DataModel. The data comes from its Studio companion plugin, which POSTs the instance tree
 to an HTTP server the extension runs on port 3667 (`luau-lsp.studioPlugin.enabled`). In
 code-docker that server runs inside code-docker, where code-server's extension host
-runs, and Studio reaches it as `studio-front:3667`.
+runs, and Studio reaches it as `roblox-studio-front:3667`.
 
 **The plugin is built here** (`config/luau-lsp-plugin/build.sh`, Dockerfile stage
 `luau-lsp-plugin-build`). It is luau-lsp's own `plugin/` at `LUAU_LSP_REF` (1.70.1, the
 extension's Open VSX version), changed only by `studio-defaults.patch`, applied with
 `--fuzz=0`:
 
-- **Default host is `http://studio-front`**, and `startAutomatically` is true. The
+- **Default host is `http://roblox-studio-front`**, and `startAutomatically` is true. The
   plugin keeps its settings in a ModuleScript, `TestService.LuauLSP_Settings`, which it
   creates in every place it opens from these defaults. A place that already has one keeps
   its own values.
@@ -1225,7 +1229,7 @@ overlay).
 
 **Side effect of upstream's design.** Every place opened gets
 `TestService.LuauLSP_Settings`, which is saved with the place. Its `host` is
-`studio-front`, which means nothing outside this setup. Delete the module from a place
+`roblox-studio-front`, which means nothing outside this setup. Delete the module from a place
 that leaves this setup, or let that Studio's own copy of the plugin rewrite it.
 
 **Verified on the test stack** against a stand-in for the extension's server: a listener
@@ -1306,7 +1310,7 @@ owned: ReplicatedStorage.Shared, ServerScriptService.Server
   - It is Rojo's own plugin at the pinned release, unmodified, with
     `plugin/src/init.server.lua` (Rojo's UI entry point) replaced by
     `StudioSync.server.lua`.
-  - Every 2 s that script asks `studio-front:34880` (code-docker's 34880, forwarded) for
+  - Every 2 s that script asks `roblox-studio-front:34880` (code-docker's 34880, forwarded) for
     `/api/rojo`. When the project name
     is a request, it claims it at the reply port (with several places open, one wins).
   - It then runs `ServeSession:__initialSync` only. That is Rojo's own hydrate, diff and
@@ -1318,7 +1322,7 @@ owned: ReplicatedStorage.Shared, ServerScriptService.Server
   copies the plugin into Studio's local Plugins folder once per boot, or removes it. It
   handles the luau-lsp plugin below the same way. It waits for a fresh install's first
   launch to create the folder. `STUDIO_SYNC_PLUGIN` is on only in the code-docker
-  overlay; standalone there is no `studio-front` to poll.
+  overlay; standalone there is no `roblox-studio-front` to poll.
 - **The overlay** mounts `config/studio-sync` into code-docker at
   `/usr/local/lib/studio-sync`, plus `launcher.sh` at `/usr/local/bin/studio-sync`. The
   directory mount is what lets a `git pull` reach a running code-docker; a file bind mount

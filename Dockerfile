@@ -59,7 +59,7 @@ COPY config/studio-sync/plugin /src
 RUN ROJO_REF="v${ROJO_VERSION}" /src/build.sh /src/StudioSync.rbxm
 
 # LuauLSP.rbxm - luau-lsp's Studio companion plugin, with studio-defaults.patch (default
-# host studio-front, auto-connect with retries). Reuses the stage above for git and rojo.
+# host roblox-studio-front, auto-connect with retries). Reuses the stage above for git and rojo.
 # LUAU_LSP_REF should match the luau-lsp extension version installed in code-server.
 FROM studio-sync-plugin-build AS luau-lsp-plugin-build
 ARG LUAU_LSP_REF=1.70.1

@@ -51,7 +51,7 @@ services:
       # 알 수 있게(예전 이름 vnc-only는 대상이 하나뿐이라고 가정한 이름이었다).
       VNC_BIND_ALIAS: roblox-studio-vnc
       # studio-sync의 Studio 쪽 플러그인을 Studio Plugins 폴더에 넣는다(끄면 빼낸다).
-      # 플러그인이 studio-front:34880을 찾기 때문에 code-docker와 붙을 때만 의미가 있어서
+      # 플러그인이 roblox-studio-front:34880을 찾기 때문에 code-docker와 붙을 때만 의미가 있어서
       # 단독 실행 기본값은 off - config/supervisor/studio-plugins-service.sh 참고.
       STUDIO_SYNC_PLUGIN: "${STUDIO_SYNC_PLUGIN:-true}"
       # luau-lsp의 Studio 동반 플러그인(DataModel을 VS Code의 luau-lsp 확장에 보내 자동완성에
@@ -61,7 +61,7 @@ services:
       # code-docker-internal에는 붙지 않는다. 플러그인이나 스크립트가 HttpService로
       # 임의 요청을 보낼 수 있는 컨테이너라, 거기 붙으면 code-docker의 nginx(로그인 없는
       # code-server, webmanager)와 dind:2375가 그대로 닿는다(실측 2026-10-06). 전용망에만
-      # 두고, 오가야 하는 포트만 아래 studio-front가 넘겨준다.
+      # 두고, 오가야 하는 포트만 아래 roblox-studio-front가 넘겨준다.
       roblox-studio-net: {}
       # VNC 전용, agent 컨테이너(code-docker/dind)는 못 붙는 격리망 - 아래
       # networks.roblox-studio-vnc 정의 참고.
@@ -144,14 +144,17 @@ services:
         aliases:
           - "${ROUTER_HOSTNAME:-router}"
 
-  # 두 망 사이의 유일한 다리. 무엇을 넘기는지와 이유는 config/studio-front/entrypoint.sh.
+  # 두 망 사이의 유일한 다리. 무엇을 넘기는지와 이유는 config/roblox-studio-front/entrypoint.sh.
+  # 서비스 키는 예전 이름 studio-front 그대로다. 키를 바꾸면 기존 컨테이너가 고아가 되고,
+  # 그 컨테이너가 같은 container_name을 쥐고 있어서 그냥 `up -d`가 이름 충돌로 실패한다
+  # (실측). 사람과 플러그인이 쓰는 이름은 container_name과 아래 별칭 roblox-studio-front다.
   studio-front:
     # nginx-unprivileged: 1024 미만 포트도, root에서 내려가는 단계도 없어서 아래
     # cap_drop: ALL이 그대로 유지된다(code-docker-firecrawl의 firecrawl-front와 같은 이유).
     image: "nginxinc/nginx-unprivileged:1.27-alpine"
     container_name: "${PREFIX:-}roblox-studio-front"
     restart: unless-stopped
-    entrypoint: ["/bin/sh", "/studio-front/entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/roblox-studio-front/entrypoint.sh"]
     environment:
       # <컨테이너>.<망> 형태 - 이 컨테이너 자신이 "studio"/"code-docker" 별칭을 갖고
       # 있어서 맨 이름은 자기 자신으로 풀릴 수 있다.
@@ -161,7 +164,7 @@ services:
       # studio-sync용 34880(serve)·34881(회신), luau-lsp Studio 플러그인 3667.
       STUDIO_CODE_DOCKER_PORTS: "${STUDIO_CODE_DOCKER_PORTS:-34872-34881 3667}"
     volumes:
-      - "./config/studio-front:/studio-front:ro"
+      - "./config/roblox-studio-front:/roblox-studio-front:ro"
     cap_drop:
       - ALL
     security_opt:
@@ -171,10 +174,15 @@ services:
       code-docker-internal:
         aliases:
           - studio
-      # Studio는 이 컨테이너를 제 이름 studio-front로 부른다(Rojo/luau-lsp 플러그인의 호스트
-      # 설정도 studio-front). code-docker라는 별칭을 주지 않는 이유: router도 이 망에
-      # 붙어 있어서, router가 code-docker:80을 찾을 때 이 컨테이너로 풀릴 수 있다.
-      roblox-studio-net: {}
+      # Studio는 이 컨테이너를 roblox-studio-front로 부른다(Rojo/luau-lsp 플러그인의 호스트
+      # 설정도 roblox-studio-front). VNC 쪽 roblox-studio-vnc와 같은 짝이고, 이 망들은
+      # router와 다른 형제 프로젝트도 붙으니 studio-*처럼 짧은 이름보다 겹칠 일이 없다.
+      # container_name과 같지만 별칭으로도 둔다: PREFIX가 붙으면 container_name이 달라진다.
+      # code-docker라는 별칭을 주지 않는 이유: router도 이 망에 붙어 있어서, router가
+      # code-docker:80을 찾을 때 이 컨테이너로 풀릴 수 있다.
+      roblox-studio-net:
+        aliases:
+          - roblox-studio-front
     logging:
       driver: "json-file"
       options:
@@ -216,8 +224,8 @@ networks:
     labels:
       netinit.provider: "${PREFIX:-}code-docker-netinit-docker"
       netinit.exempt-forward: "true"
-  # Studio의 작업망. Studio, router(게이트웨이), studio-front만 붙는다 - code-docker와
-  # dind는 이 망에 없어서 Studio에서 그쪽으로 가는 길은 studio-front가 넘겨주는 포트뿐이다.
+  # Studio의 작업망. Studio, router(게이트웨이), roblox-studio-front만 붙는다 - code-docker와
+  # dind는 이 망에 없어서 Studio에서 그쪽으로 가는 길은 roblox-studio-front가 넘겨주는 포트뿐이다.
   # 외부 egress는 code-docker-internal과 똑같이 router의 netgate를 거친다.
   roblox-studio-net:
     name: "${PREFIX:-}roblox-studio-net"

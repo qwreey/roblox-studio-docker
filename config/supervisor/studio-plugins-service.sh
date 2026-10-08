@@ -6,10 +6,10 @@ set -u
 # switches are on only in the code-docker overlay:
 #
 #   StudioSync.rbxm   STUDIO_SYNC_PLUGIN       studio-sync's Studio half (config/studio-sync/);
-#                                              polls studio-front:34880
+#                                              polls roblox-studio-front:34880
 #   LuauLSP.rbxm      STUDIO_LUAU_LSP_PLUGIN   luau-lsp's companion plugin
 #                                              (config/luau-lsp-plugin/); sends the DataModel
-#                                              to studio-front:3667
+#                                              to roblox-studio-front:3667
 #
 # Runs once per boot. Studio loads local plugins when it starts, so a plugin installed or
 # updated while Studio is running takes effect on Studio's next start.
