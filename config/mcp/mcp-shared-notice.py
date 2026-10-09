@@ -18,6 +18,7 @@ Every other message passes through byte for byte.
 Usage: mcp-shared-notice.py <command> [args...]   (stderr goes to the command)
 """
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -53,10 +54,16 @@ def encode(message: dict) -> bytes:
 
 
 def from_server(line: bytes, notice: str, rojo_guide: str) -> bytes:
+    # Whatever this can't rewrite goes through as it came: a message that doesn't parse, or
+    # one that does but can't be encoded again (a lone surrogate escape like "\ud800").
     try:
-        message = json.loads(line)
-    except ValueError:
+        return rewrite(line, notice, rojo_guide)
+    except (ValueError, UnicodeError):
         return line
+
+
+def rewrite(line: bytes, notice: str, rojo_guide: str) -> bytes:
+    message = json.loads(line)
     result = message.get("result") if isinstance(message, dict) else None
     if not isinstance(result, dict):
         return line
@@ -139,4 +146,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    status = main()
+    sys.stdout.flush()
+    # Not sys.exit: client_to_server is usually still blocked reading stdin, holding its
+    # buffer's lock, and interpreter shutdown aborts on that ("Fatal Python error:
+    # _enter_buffered_busy") at the end of every session.
+    os._exit(status)

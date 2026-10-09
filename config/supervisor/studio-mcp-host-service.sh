@@ -13,7 +13,9 @@ set -u
 if [[ -z "${MCP_TOKEN:-}" ]]; then
   echo "[studio-mcp-host] MCP_TOKEN not set - the bridge is off, so idling"
   trap 'exit 0' TERM INT
-  while true; do sleep 3600; done
+  # In the background and waited on: bash runs a trap only once the foreground command
+  # returns, which for a plain `sleep 3600` is up to an hour after supervisord asked.
+  while true; do sleep 3600 & wait $!; done
 fi
 
 . /etc/roblox-studio/studio-wine.sh

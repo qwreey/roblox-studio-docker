@@ -11,7 +11,9 @@ set -u
 if [[ -z "${MCP_TOKEN:-}" ]]; then
   echo "[mcp-bridge-service] MCP_TOKEN not set — idling (see SETUP.md's 'Studio MCP over the network' section)"
   trap 'echo "[mcp-bridge-service] stopping (idle)"; exit 0' TERM INT
-  while true; do sleep 3600; done
+  # In the background and waited on: bash runs a trap only once the foreground command
+  # returns, which for a plain `sleep 3600` is up to an hour after supervisord asked.
+  while true; do sleep 3600 & wait $!; done
 fi
 
 # mcp-bridge.sh has its own internal restart loop (respawns supergateway/caddy on
