@@ -302,7 +302,8 @@ def serve_request(name):
 
 def wait_for_result(reply, seconds, what):
     if not reply.done.wait(seconds):
-        sys.exit(f"studio-sync: {reply.chosen['place']} took the {what} but didn't finish within {seconds:g}s")
+        sys.exit(f"studio-sync: {reply.chosen['place']} took the {what} but didn't finish within {seconds:g}s "
+                 "(--finish-timeout) - it may be partly applied; check the place, then run it again")
     for offer in reply.late:
         print(f"studio-sync: another Studio that could have taken this answered after {reply.chosen['studio']} "
               f"({reply.chosen['place']}) was chosen: {describe(offer)}. If the {what} went to the wrong one, "
@@ -342,7 +343,7 @@ def release(owner, args):
     try:
         print(f"studio-sync: releasing what {owner} owns, waiting for Studio...", file=sys.stderr)
         choose(reply, time.monotonic(), args.timeout, "release", wanted)
-        wait_for_result(reply, args.timeout, "release")
+        wait_for_result(reply, args.finish_timeout, "release")
     finally:
         request.shutdown()
         server.shutdown()
@@ -403,7 +404,10 @@ def main():
     parser.add_argument("project", nargs="?", default="default.project.json",
                         help="Rojo project file (default: default.project.json)")
     parser.add_argument("--owner", help="AgentOwner name (default: $STUDIO_SYNC_OWNER, else the git branch)")
-    parser.add_argument("--timeout", type=float, default=60, help="seconds to wait for Studio (default 60)")
+    parser.add_argument("--timeout", type=float, default=60,
+                        help="seconds to wait for a Studio to take the request (default 60)")
+    parser.add_argument("--finish-timeout", type=float, default=300,
+                        help="seconds the chosen Studio gets to finish once it has taken it (default 300)")
     parser.add_argument("--json", action="store_true", help="print the plugin's result as JSON")
     parser.add_argument("--release", action="store_true",
                         help="clear this owner's AgentOwner marks in Studio instead of syncing")
@@ -453,7 +457,9 @@ def main():
         print(f"studio-sync: serving {os.path.relpath(project)} as {owner} on :{SERVE_PORT}, waiting for Studio...",
               file=sys.stderr)
         choose(reply, started, args.timeout, "sync", wanted)
-        wait_for_result(reply, args.timeout, "sync")
+        # Its own, longer limit: giving up here stops `rojo serve` under a sync that is
+        # already changing the place, and a large project's first sync takes minutes.
+        wait_for_result(reply, args.finish_timeout, "sync")
     finally:
         rojo.terminate()
         try:
