@@ -6,7 +6,9 @@
 	for a `rojo serve` whose project name is a studio-sync request
 	(`studio-sync owner=<name> reply=<port>`, written by the studio-sync CLI), then:
 
-	1. claims the request at the reply port, so only one open place handles it,
+	1. offers this place at the reply port and waits for the CLI's choice - every open
+	   place runs this plugin, and the CLI picks one of them (or none, when it can't tell
+	   which is meant),
 	2. runs Rojo's initial sync once - Rojo's own diff and reconciler, no confirmation,
 	   no WebSocket afterwards - unless something it would change belongs to another
 	   agent (an AgentOwner attribute on it or an ancestor),
@@ -14,7 +16,8 @@
 	4. reports the result to the reply port and forgets the session.
 
 	A `studio-sync release owner=<name>` request (`studio-sync --release`, no Rojo behind
-	it) instead clears AgentOwner wherever it names that owner.
+	it) instead clears AgentOwner wherever it names that owner, and a `studio-sync list`
+	request (`studio-sync --list`) only collects the offers.
 
 	A person's ordinary `rojo serve` is never touched: its project name doesn't match.
 ]]
@@ -24,6 +27,7 @@ if not plugin then
 end
 
 local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
 local RunService = game:GetService("RunService")
 
 if not RunService:IsEdit() then
@@ -46,6 +50,11 @@ local OWNER_ATTRIBUTE = "AgentOwner"
 local REQUEST_PATTERN = "^studio%-sync owner=([%w%._/%-]+) reply=(%d+)$"
 -- `studio-sync --release`: no Rojo involved, the CLI answers /api/rojo itself.
 local RELEASE_PATTERN = "^studio%-sync release owner=([%w%._/%-]+) reply=(%d+)$"
+-- `studio-sync --list`: every open place offers, none is chosen.
+local LIST_PATTERN = "^studio%-sync list reply=(%d+)$"
+-- Tells this place from another Studio's of the same name (`studio-sync --studio`).
+-- Lasts as long as the plugin does, so it changes when Studio restarts.
+local STUDIO = string.lower(string.sub(HttpService:GenerateGUID(false), 1, 8))
 -- Engine-made containers that sit between a service and a project's own instances: the
 -- project's instances inside them are what gets an owner, never the shared container.
 local SHARED_CONTAINERS = { StarterPlayerScripts = true, StarterCharacterScripts = true }
@@ -59,6 +68,23 @@ local function post(port, path, body)
 			Body = HttpService:JSONEncode(body),
 		})
 	end)
+end
+
+-- The place's name as MCP's list_roblox_studios shows it. A published place's DataModel is
+-- named like an unsaved one (Place1); its own name comes from Roblox, asked once.
+local publishedNames = {}
+local function placeName()
+	local placeId = game.PlaceId
+	if placeId == 0 then
+		return game.Name
+	end
+	if publishedNames[placeId] == nil then
+		local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, placeId)
+		if ok and type(info) == "table" and type(info.Name) == "string" then
+			publishedNames[placeId] = info.Name
+		end
+	end
+	return publishedNames[placeId] or game.Name
 end
 
 -- The nearest AgentOwner on the instance or its ancestors, and where it was found.
@@ -141,7 +167,7 @@ local function stampOwner(instanceMap, owner)
 end
 
 local function syncOnce(apiContext, serverInfo, owner, replyPort)
-	local result = { ok = false, owner = owner, place = game.Name }
+	local result = { ok = false, studio = STUDIO, owner = owner, place = placeName() }
 
 	local session = ServeSession.new({ apiContext = apiContext, twoWaySync = false })
 	session:setConfirmCallback(function(instanceMap, patch)
@@ -179,7 +205,7 @@ end
 -- The request is read from /api/rojo directly rather than through ApiContext:connect(),
 -- which rejects a server on another protocol or one whose servePlaceIds exclude this
 -- place without saying which project it was - the CLI would only see a timeout. Here the
--- request is claimed first and connect()'s refusal is reported back as the result.
+-- place is offered first and connect()'s refusal is reported back as the result.
 local function readRequest(url)
 	local ok, info = Http.get(url .. "/api/rojo")
 		:andThen(function(response)
@@ -196,6 +222,10 @@ local function readRequest(url)
 	owner, replyPort = string.match(info.projectName, RELEASE_PATTERN)
 	if owner ~= nil then
 		return "release", owner, tonumber(replyPort)
+	end
+	replyPort = string.match(info.projectName, LIST_PATTERN)
+	if replyPort ~= nil then
+		return "list", nil, tonumber(replyPort)
 	end
 	return nil
 end
@@ -220,16 +250,22 @@ local function poll()
 	if kind == nil then
 		return
 	end
-	local claimed, response = post(replyPort, "/claim", { place = game.Name })
-	if not (claimed and response.Success) then
+	-- The CLI answers once it has heard from every open place: 200 for the one it chose.
+	-- The place id goes as text, so its digits don't depend on how JSONEncode writes a large number.
+	local offered, response = post(replyPort, "/offer", {
+		studio = STUDIO,
+		place = placeName(),
+		placeId = string.format("%d", game.PlaceId),
+	})
+	if not (offered and response.StatusCode == 200) then
 		return
 	end
 
 	if kind == "release" then
 		local ok, released = pcall(release, owner)
 		post(replyPort, "/result", if ok
-			then { ok = true, owner = owner, place = game.Name, released = released }
-			else { ok = false, owner = owner, error = tostring(released) })
+			then { ok = true, studio = STUDIO, owner = owner, place = placeName(), released = released }
+			else { ok = false, studio = STUDIO, owner = owner, error = tostring(released) })
 		print(`[studio-sync] released {if ok then #released else 0} instance(s) owned by {owner}`)
 		return
 	end
@@ -237,11 +273,11 @@ local function poll()
 	local apiContext = ApiContext.new(url)
 	local connected, serverInfo = apiContext:connect():await()
 	if not connected then
-		post(replyPort, "/result", { ok = false, owner = owner, error = tostring(serverInfo) })
+		post(replyPort, "/result", { ok = false, studio = STUDIO, owner = owner, error = tostring(serverInfo) })
 	else
 		local success, err = pcall(syncOnce, apiContext, serverInfo, owner, replyPort)
 		if not success then
-			post(replyPort, "/result", { ok = false, owner = owner, error = tostring(err) })
+			post(replyPort, "/result", { ok = false, studio = STUDIO, owner = owner, error = tostring(err) })
 		end
 	end
 	apiContext:disconnect()

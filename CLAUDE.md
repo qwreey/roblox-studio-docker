@@ -1321,7 +1321,8 @@ owned: ReplicatedStorage.Shared, ServerScriptService.Server
     `StudioSync.server.lua`.
   - Every 2 s that script asks `roblox-studio-front:34880` (code-docker's 34880, forwarded) for
     `/api/rojo`. When the project name
-    is a request, it claims it at the reply port (with several places open, one wins).
+    is a request, it offers its place at the reply port and waits for the CLI's answer
+    (see "Several Studios" below).
   - It then runs `ServeSession:__initialSync` only. That is Rojo's own hydrate, diff and
     reconcile, but without the status changes, place-id writes and live WebSocket that
     `start()` adds.
@@ -1363,6 +1364,26 @@ to rebase).
   - It queues on the reply port like a sync.
   - Verified: after agent-a released, agent-b's sync onto the same paths went through
     (`+0 ~0 -0`, now owned by agent-b).
+- **Several Studios.** Every open place is its own Studio process with its own copy of
+  the plugin, and all of them see the request. Each POSTs `/offer` (`studio`: an id the
+  plugin makes up when it loads, `place`, `placeId`); the CLI holds the requests and
+  answers 200 to the one it chooses, 409 to the rest.
+  - The CLI collects offers for 3 s (the plugin's 2 s poll plus slack), keeps the ones
+    `--place` / `$STUDIO_SYNC_PLACE` names (place id, name, or a local file's name without
+    `.rbxl`) or, without those, the ones the project's `servePlaceIds`/`blockedPlaceIds`
+    allow, and goes ahead only if exactly one is left. More than one is refused with the
+    list: Rojo's initial sync also removes instances, so the wrong place is worse than no
+    sync.
+  - A place id or `--studio <id>` is taken the moment it offers. A name has to wait for
+    the others: every Studio process calls its first unsaved place `Place1`.
+  - `place` is what `list_roblox_studios` shows as `name`: `game.Name` for a local place,
+    and for a published one its name from `MarketplaceService:GetProductInfo`, since its
+    DataModel is named `Place1` like an unsaved one.
+  - `--list` prints the offers. `--release` chooses the same way.
+  - Why not MCP's `studio_id`: it isn't something a plugin is known to be able to read.
+    The place id and name are visible to both.
+  - A plugin from before this POSTs `/claim`; the CLI answers 409 and says that Studio
+    needs the rebuilt image and a restart.
 - **Fixed ports, queued.** Concurrent runs queue on the reply port. The plugin watches
   one port rather than a range because every probe of a closed port writes about 4
   `HttpTraceError` lines to Studio's log. Measured on the test stack:
@@ -1373,7 +1394,9 @@ to rebase).
 - **Restarting Studio.** Studio loads local plugins only at start. Replacing
   `StudioSync.rbxm` under a running Studio does nothing until it restarts (measured: one
   `loadPlugin` line in the log).
-- **Speed.** A sync takes 0.7 to 2.1 s, mostly the 2 s poll.
+- **Speed.** About 4 s when the CLI has to compare offers (no place named, a name, or
+  `servePlaceIds`): the 3 s window plus Rojo's start. 1.5 to 2 s with a place id or
+  `--studio`, mostly the 2 s poll.
 
 **Verified on the test stack, 2026-10-06** (local `AgentTestPlace.rbxl`, Rojo 7.7.1
 pinned in the demo project's `mise.toml`):
@@ -1388,6 +1411,24 @@ pinned in the demo project's `mise.toml`):
 | Three concurrent runs | served in turn |
 | Nobody answering | timeout with a hint |
 | Plugin service on a recreated container | installs, and removes when switched off |
+
+**Several Studios, verified on the test stack 2026-10-12** with three open at once, each
+in its own Wine desktop: an unsaved `Place2`, a `Place1` saved to a file, and a published
+place (`table-sim`). Where each sync landed was read back over MCP from all three.
+
+| Case | Result |
+|---|---|
+| `--list` | all three, with the names `list_roblox_studios` shows |
+| No place named, sync and `--release` | refused, lists the three |
+| `--place Place2` | into Place2 only |
+| `--place Place1` while the published place still offered `Place1` | refused, lists the two |
+| `--studio <id>` | into that one only |
+| `--place <place id>`, `--place table-sim` | the published place |
+| Project with `servePlaceIds` naming the published place | chosen without `--place` |
+| Project with `servePlaceIds` naming no open place | refused, lists the three |
+| Two runs at once, different places | served in turn |
+
+A plugin from before offers was only tried with a stand-in for it, not with a Studio.
 
 **Side finding.** Studio writes plugin and script `print` output into its log file as
 `[FLog::CreatorOutput]` lines, in `~/.local/share/vinegar/appdata/Roblox/logs/`. That is

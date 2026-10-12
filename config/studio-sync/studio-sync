@@ -3,8 +3,14 @@
 
 Runs the project's own `rojo serve` (whatever version mise or PATH gives in the project
 directory) for the length of one sync, under a temporary wrapper project whose name
-carries the request. The StudioSync plugin in Studio finds it, claims it, runs Rojo's
-initial sync, and reports back here. Nothing in the repository is written.
+carries the request. The StudioSync plugin in Studio finds it, offers its place, and - if
+chosen - runs Rojo's initial sync and reports back here. Nothing in the repository is
+written.
+
+Every open place runs its own copy of the plugin, so each one offers. With one place open
+that one is chosen. With several, `--place` (or the project's servePlaceIds) picks; a run
+that can't tell which place is meant is refused rather than synced into whichever answered
+first. `--list` shows what is open.
 
 Every sync uses the same two ports, 34880 for `rojo serve` and 34881 for the reply, so
 the plugin only has to watch one port (each probe of a closed port adds a few lines to
@@ -32,6 +38,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SERVE_PORT, REPLY_PORT = 34880, 34881
 # The Rojo protocol of the plugin built into the image (Dockerfile's ROJO_VERSION).
 PLUGIN_PROTOCOL = 5
+# How long offers are collected before choosing among them: the plugin's poll interval
+# (2 s), within which every open place has seen the request, plus slack.
+OFFER_WINDOW = 3.0
 
 
 def default_owner(project_dir):
@@ -80,26 +89,75 @@ def rojo_command():
 
 
 class Reply:
-    def __init__(self):
-        self.claimed_by = None
+    """What the plugins have said: offers from each open place, then the chosen one's result."""
+
+    def __init__(self, explicit=None, unique=None, allowed=None, collect_only=False):
+        self.explicit = explicit        # tells whether an offer is what --place/--studio named
+        self.unique = unique            # ... and by something no other Studio shares
+        self.allowed = allowed          # without those: whether the project's place ids let it in
+        self.collect_only = collect_only  # --list: offers are recorded, nobody is chosen
+        self.lock = threading.Lock()
+        self.offers = {}                # studio id -> offer, in arrival order
+        self.first_offer = None         # time.monotonic() of the first one
+        self.outdated = set()           # places whose plugin predates offers
+        self.late = []                  # offers that came after the choice and could have been it
+        self.chosen = None
+        self.decided = threading.Event()
         self.result = None
         self.done = threading.Event()
+
+    def offer(self, body):
+        studio = str(body.get("studio", "")).lower()
+        with self.lock:
+            if studio not in self.offers:
+                self.offers[studio] = {"studio": studio, "place": str(body.get("place", "?")),
+                                       "placeId": str(body.get("placeId", "0"))}
+                if self.first_offer is None:
+                    self.first_offer = time.monotonic()
+                if self.decided.is_set():
+                    if (self.explicit or self.allowed or (lambda offer: True))(self.offers[studio]):
+                        self.late.append(self.offers[studio])
+                # Named by an id, it needs no comparing with the others.
+                elif self.unique and self.unique(self.offers[studio]):
+                    self.chosen = self.offers[studio]
+                    self.decided.set()
+        return studio
+
+    def decide(self, chosen):
+        with self.lock:
+            if not self.decided.is_set():
+                self.chosen = chosen
+                self.decided.set()
+            return self.chosen
 
 
 def make_handler(reply):
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-            if self.path == "/claim":
-                if reply.claimed_by is None:
-                    reply.claimed_by = body.get("place", "?")
+            if self.path == "/offer":
+                studio = reply.offer(body)
+                if reply.collect_only:
+                    self.send_response(204)
+                else:
+                    # Held until the choice is made, so the chosen place starts right away
+                    # instead of on its next poll.
+                    reply.decided.wait(OFFER_WINDOW * 2)
+                    chosen = reply.chosen
+                    self.send_response(200 if chosen and chosen["studio"] == studio else 409)
+            elif self.path == "/claim":
+                # What the plugin sent before it offered: first claim won, whichever place
+                # it came from. Such a plugin can't take part in a choice.
+                reply.outdated.add(str(body.get("place", "?")))
+                self.send_response(409)
+            elif self.path == "/result":
+                chosen = reply.chosen
+                if chosen and str(body.get("studio", "")).lower() == chosen["studio"]:
+                    reply.result = body
+                    reply.done.set()
                     self.send_response(200)
                 else:
                     self.send_response(409)
-            elif self.path == "/result":
-                reply.result = body
-                reply.done.set()
-                self.send_response(200)
             else:
                 self.send_response(404)
             self.end_headers()
@@ -108,6 +166,83 @@ def make_handler(reply):
             pass
 
     return Handler
+
+
+def describe(offer):
+    place_id = "" if offer["placeId"] == "0" else f" (place {offer['placeId']})"
+    return f"{offer['studio']}  {offer['place']}{place_id}"
+
+
+def listing(offers):
+    return "\n".join("  " + describe(offer) for offer in offers)
+
+
+def explicit_choice(args):
+    """What --studio or --place (or $STUDIO_SYNC_PLACE) asks for: a test for an offer, the
+    same for a match that can be taken without waiting for the other offers, and words for
+    it ("no Studio has ...").
+
+    A place id or a Studio's id is such a match. A name is not: every Studio calls its
+    first unsaved place Place1."""
+    if args.studio:
+        want = args.studio.lower()
+        by_id = lambda offer: offer["studio"] == want
+        return by_id, by_id, f"the id {want}"
+    place = args.place or os.environ.get("STUDIO_SYNC_PLACE")
+    if place:
+        by_id = lambda offer: offer["placeId"] == place != "0"
+
+        def by_name(offer):
+            stem, extension = os.path.splitext(offer["place"])
+            return place == offer["place"] or (extension in (".rbxl", ".rbxlx") and place == stem)
+
+        return (lambda offer: by_id(offer) or by_name(offer)), by_id, f"{place} open"
+    return None, None, None
+
+
+def outdated_note(reply):
+    return (f"{', '.join(sorted(reply.outdated))}: its StudioSync plugin is older than this studio-sync and "
+            "can't be chosen - rebuild the studio image, then restart that Studio")
+
+
+def choose(reply, started, seconds, what, wanted=None):
+    """Waits for the place this run is for and returns its offer; exits when none of the
+    open ones is it, or when more than one could be."""
+    deadline = started + seconds
+    while not reply.decided.wait(0.1):
+        now = time.monotonic()
+        first = reply.first_offer
+        # Offers that began inside the first window are complete when it ends. A place
+        # that showed up later (Studio was still starting) opens a window of its own.
+        if first is not None and now >= (started if first <= started + OFFER_WINDOW else first) + OFFER_WINDOW:
+            break
+        if first is None and reply.outdated and now >= started + OFFER_WINDOW:
+            sys.exit(f"studio-sync: {outdated_note(reply)}")
+        if now >= deadline:
+            sys.exit(f"studio-sync: no Studio picked this up within {seconds:g}s - is Studio running with "
+                     "a place open and the StudioSync plugin installed (and its HTTP permission allowed)?")
+
+    if reply.decided.is_set():
+        return reply.chosen
+    with reply.lock:
+        offers = list(reply.offers.values())
+    if reply.outdated:
+        print(f"studio-sync: skipping {outdated_note(reply)}", file=sys.stderr)
+
+    candidates, wanted = offers, wanted or "a place open"
+    if reply.explicit:
+        candidates = [offer for offer in offers if reply.explicit(offer)]
+    elif reply.allowed:
+        candidates = [offer for offer in offers if reply.allowed(offer)]
+        wanted = "a place open that the project's servePlaceIds/blockedPlaceIds allow"
+    # decide() answers with an earlier choice if a place named by id offered just now.
+    chosen = reply.decide(candidates[0] if len(candidates) == 1 else None)
+    if chosen:
+        return chosen
+    if not candidates:
+        sys.exit(f"studio-sync: no Studio has {wanted}. Open:\n{listing(offers)}")
+    sys.exit(f"studio-sync: {len(candidates)} Studios could take this {what} - name one with --place "
+             f"(a place id or name) or --studio (the id on the left):\n{listing(candidates)}")
 
 
 def wait_for_server(port, process, seconds):
@@ -124,9 +259,10 @@ def wait_for_server(port, process, seconds):
     return None
 
 
-def release_info(name):
-    """/api/rojo's answer for a release request, in msgpack like Rojo 7.7's: a one-entry
-    map {projectName: name}, which is all the plugin reads before claiming."""
+def request_info(name):
+    """/api/rojo's answer for a request with no Rojo behind it (--release, --list), in
+    msgpack like Rojo 7.7's: a one-entry map {projectName: name}, which is all the plugin
+    reads before offering."""
     data = name.encode()
     key = b"projectName"
     if len(data) < 32:
@@ -138,8 +274,8 @@ def release_info(name):
     return b"\x81" + bytes([0xa0 | len(key)]) + key + value
 
 
-def serve_release_request(name):
-    body = release_info(name)
+def serve_request(name):
+    body = request_info(name)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -164,23 +300,49 @@ def serve_release_request(name):
     return server
 
 
-def wait_for_reply(reply, seconds, what):
-    if reply.done.wait(seconds):
-        return
-    if reply.claimed_by is None:
-        sys.exit(f"studio-sync: no Studio picked this up within {seconds:g}s - is Studio running with "
-                 "a place open and the StudioSync plugin installed (and its HTTP permission allowed)?")
-    sys.exit(f"studio-sync: {reply.claimed_by} claimed the {what} but didn't finish within {seconds:g}s")
+def wait_for_result(reply, seconds, what):
+    if not reply.done.wait(seconds):
+        sys.exit(f"studio-sync: {reply.chosen['place']} took the {what} but didn't finish within {seconds:g}s")
+    for offer in reply.late:
+        print(f"studio-sync: another Studio that could have taken this answered after {reply.chosen['studio']} "
+              f"({reply.chosen['place']}) was chosen: {describe(offer)}. If the {what} went to the wrong one, "
+              "name the right one with --place or --studio (the id on the left).", file=sys.stderr)
+
+
+def list_studios(args):
+    reply = Reply(collect_only=True)
+    server = take_turn(make_handler(reply), args.timeout)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = serve_request(f"studio-sync list reply={REPLY_PORT}")
+    try:
+        time.sleep(OFFER_WINDOW)
+    finally:
+        request.shutdown()
+        server.shutdown()
+
+    offers = list(reply.offers.values())
+    if args.json:
+        print(json.dumps(offers, ensure_ascii=False, indent=2))
+    elif offers:
+        print(listing(offers))
+    if reply.outdated:
+        print(f"studio-sync: {outdated_note(reply)}", file=sys.stderr)
+    if not offers and not reply.outdated:
+        print("studio-sync: no Studio answered - is Studio running with a place open and the StudioSync "
+              "plugin installed (and its HTTP permission allowed)?", file=sys.stderr)
+    return 0 if offers else 1
 
 
 def release(owner, args):
-    reply = Reply()
+    explicit, unique, wanted = explicit_choice(args)
+    reply = Reply(explicit, unique)
     server = take_turn(make_handler(reply), args.timeout)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    request = serve_release_request(f"studio-sync release owner={owner} reply={REPLY_PORT}")
+    request = serve_request(f"studio-sync release owner={owner} reply={REPLY_PORT}")
     try:
         print(f"studio-sync: releasing what {owner} owns, waiting for Studio...", file=sys.stderr)
-        wait_for_reply(reply, args.timeout, "release")
+        choose(reply, time.monotonic(), args.timeout, "release", wanted)
+        wait_for_result(reply, args.timeout, "release")
     finally:
         request.shutdown()
         server.shutdown()
@@ -213,6 +375,16 @@ def protocol_problem(info):
             f"{PLUGIN_PROTOCOL} (Rojo 7.7 or later) - pin a newer rojo in the project")
 
 
+def restriction_test(restrictions):
+    """Tells whether an offer's place passes the project's servePlaceIds/blockedPlaceIds;
+    None when the project has neither."""
+    if not restrictions:
+        return None
+    serve, blocked = (None if key not in restrictions else {str(place) for place in restrictions[key]}
+                      for key in ("servePlaceIds", "blockedPlaceIds"))
+    return lambda offer: (serve is None or offer["placeId"] in serve) and not (blocked and offer["placeId"] in blocked)
+
+
 def place_restrictions(project):
     """servePlaceIds/blockedPlaceIds from the real project. Rojo reads them only from the
     project it serves, which is the wrapper, so they have to be copied over."""
@@ -235,8 +407,14 @@ def main():
     parser.add_argument("--json", action="store_true", help="print the plugin's result as JSON")
     parser.add_argument("--release", action="store_true",
                         help="clear this owner's AgentOwner marks in Studio instead of syncing")
+    parser.add_argument("--place", help="with several Studios open: the place to use, by place id or name "
+                                        "(default: $STUDIO_SYNC_PLACE, else the project's servePlaceIds)")
+    parser.add_argument("--studio", help="the same, by the id --list shows (two places with one name)")
+    parser.add_argument("--list", action="store_true", help="list the open Studios instead of syncing")
     args = parser.parse_args()
 
+    if args.list:
+        return list_studios(args)
     if args.release:
         return release(clean_owner(args.owner) if args.owner else default_owner(os.getcwd()), args)
 
@@ -246,7 +424,9 @@ def main():
     project_dir = os.path.dirname(project)
     owner = clean_owner(args.owner) if args.owner else default_owner(project_dir)
 
-    reply = Reply()
+    explicit, unique, wanted = explicit_choice(args)
+    restrictions = place_restrictions(project)
+    reply = Reply(explicit, unique, restriction_test(restrictions))
     server = take_turn(make_handler(reply), args.timeout)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
@@ -254,7 +434,7 @@ def main():
     wrapper = os.path.join(work, "studio-sync.project.json")
     with open(wrapper, "w") as f:
         json.dump({"name": f"studio-sync owner={owner} reply={REPLY_PORT}", "tree": {"$path": project},
-                   **place_restrictions(project)}, f)
+                   **restrictions}, f)
 
     log = open(os.path.join(work, "rojo.log"), "w+")
     rojo = subprocess.Popen(
@@ -263,6 +443,7 @@ def main():
     )
     try:
         info = wait_for_server(SERVE_PORT, rojo, 30)
+        started = time.monotonic()
         if info is None:
             log.seek(0)
             sys.exit(f"studio-sync: rojo serve didn't come up:\n{log.read().strip()}")
@@ -271,7 +452,8 @@ def main():
             sys.exit(f"studio-sync: {problem}")
         print(f"studio-sync: serving {os.path.relpath(project)} as {owner} on :{SERVE_PORT}, waiting for Studio...",
               file=sys.stderr)
-        wait_for_reply(reply, args.timeout, "sync")
+        choose(reply, started, args.timeout, "sync", wanted)
+        wait_for_result(reply, args.timeout, "sync")
     finally:
         rojo.terminate()
         try:

@@ -361,6 +361,8 @@ inside code-docker:
 studio-sync                     # default.project.json, owner = the git branch
 studio-sync path/to/x.project.json --owner my-task --json
 studio-sync --release           # clear this owner's AgentOwner marks (instances stay)
+studio-sync --list              # the open Studios: id, place name, place id
+studio-sync --place MyPlace     # with several open: by place name or place id
 ```
 
 - It runs the project's own `rojo serve` for one sync and stops it again. That is the
@@ -368,6 +370,10 @@ studio-sync --release           # clear this owner's AgentOwner marks (instances
 - Studio's StudioSync plugin applies the sync to the open place. It marks the synced
   top-level instances with an `AgentOwner` attribute, and refuses a sync that would change
   instances another owner marked.
+- With several Studios open, a sync or `--release` that doesn't say which place is refused
+  and lists them. `--place` (or `$STUDIO_SYNC_PLACE`) names one; a project with
+  `servePlaceIds` picks its own place; `--studio <id>` tells apart two Studios whose
+  places share a name (two unsaved `Place1`s).
 - Needs Studio running with a place open. The plugin is installed on boot, and Studio
   loads it the next time it starts.
 - Ports 34880-34881 are reserved for it. Ordinary `rojo serve` for live sync still works

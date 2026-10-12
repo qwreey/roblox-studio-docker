@@ -5,9 +5,12 @@ Run `studio-sync` from a shell in code-docker (where the project's files are), i
     studio-sync                                   # default.project.json; owner = your git branch
     studio-sync path/to/x.project.json --owner my-task --json
     studio-sync --release                         # clear your AgentOwner marks, instances stay
+    studio-sync --list                            # the open Studios: id, place name, place id
+    studio-sync --place MyPlace                   # with several Studios open: by place name or place id
     studio-sync --help
 
 - Ownership: every top-level instance it syncs (directly under a service) gets an `AgentOwner` attribute with your owner name. A sync that would change instances another owner holds is refused (exit 1); concurrent syncs run one after another. Release your marks with `--release` when you're done so others may change them.
+- Several Studios: when `list_roblox_studios` shows more than one, pass `--place` with the place id or the name from the `name` of the one you work in (the `studio_id` itself is not accepted); a place id is the quicker of the two. Without it the sync is refused and lists the open places, unless the project's `servePlaceIds` matches exactly one. `--release` takes `--place` the same way. Two Studios whose places share a name and have no place id: `--studio <id>`, the id from `studio-sync --list`.
 - Needs: Studio running with a place open (`list_roblox_studios` shows it). The sync plugin is installed when the studio container boots and Studio loads plugins only at start, so a Studio started before that needs a restart - a person at Studio's screen does that.
 - Check the result with MCP tools (`search_game_tree`, `inspect_instance`) or `studio-output -n 100 --no-follow` in code-docker, which prints Studio's Output window (everyone's output, not only yours).
 - `rojo serve` processes you may see in code-docker are not this: `rojo sourcemap --watch` belongs to the luau-lsp editor extension, and a live `rojo serve` is a person's own session (below).
