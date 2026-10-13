@@ -140,8 +140,15 @@ def main() -> int:
 
     threading.Thread(target=client_to_server, daemon=True).start()
 
-    for line in child.stdout:
-        write_out(from_server(line, notice, rojo_guide))
+    try:
+        for line in child.stdout:
+            write_out(from_server(line, notice, rojo_guide))
+    except BrokenPipeError:
+        # The client closed its end first. Nothing more can be delivered, so the server
+        # goes too - left alone it would block on a pipe nobody reads. stdout becomes
+        # /dev/null so the flush on the way out has somewhere to go.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        child.terminate()
     return child.wait()
 
 

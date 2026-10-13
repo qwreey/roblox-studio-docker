@@ -12,9 +12,10 @@ set -u
 
 if [[ -z "${MCP_TOKEN:-}" ]]; then
   echo "[studio-mcp-host] MCP_TOKEN not set - the bridge is off, so idling"
-  trap 'exit 0' TERM INT
   # In the background and waited on: bash runs a trap only once the foreground command
   # returns, which for a plain `sleep 3600` is up to an hour after supervisord asked.
+  # The trap takes that sleep along instead of leaving it behind.
+  trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM INT
   while true; do sleep 3600 & wait $!; done
 fi
 
@@ -32,7 +33,7 @@ mkfifo "${STDIN_FIFO}"
 exec 3<>"${STDIN_FIFO}"
 
 pid=""
-trap '[[ -n "${pid}" ]] && kill "${pid}" 2>/dev/null; exit 0' TERM INT
+trap '[[ -n "${pid}" ]] && kill "${pid}" 2>/dev/null; kill $(jobs -p) 2>/dev/null; exit 0' TERM INT
 
 said_waiting=""
 while true; do
