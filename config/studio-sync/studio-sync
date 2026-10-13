@@ -27,6 +27,8 @@ import json
 import os
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -41,6 +43,9 @@ PLUGIN_PROTOCOL = 5
 # How long offers are collected before choosing among them: the plugin's poll interval
 # (2 s), within which every open place has seen the request, plus slack.
 OFFER_WINDOW = 3.0
+# The temporary directory and wrapper project of one sync; claim_serve_port knows a
+# leftover `rojo serve` by them.
+WORK_PREFIX, WRAPPER_NAME = "studio-sync-", "studio-sync.project.json"
 
 
 def default_owner(project_dir):
@@ -61,8 +66,10 @@ def clean_owner(owner):
     return re.sub(r"[^\w./-]", "-", owner, flags=re.ASCII)
 
 
-def take_turn(handler, seconds):
-    """Binds the reply port, waiting while another studio-sync holds it."""
+def take_turn(handler, args):
+    """Binds the reply port, waiting while another studio-sync holds it - for as long as
+    that one may take, which is both of its own limits."""
+    seconds = args.timeout + args.finish_timeout
     deadline = time.monotonic() + seconds
     waiting = False
     while True:
@@ -76,6 +83,46 @@ def take_turn(handler, seconds):
                 print("studio-sync: another sync is running, waiting for it to finish...", file=sys.stderr)
                 waiting = True
             time.sleep(0.5)
+
+
+def serve_port_free():
+    with socket.socket() as probe:
+        # As a server would bind it: only another listener makes this fail.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("0.0.0.0", SERVE_PORT))
+        except OSError:
+            return False
+    return True
+
+
+def claim_serve_port():
+    """Makes sure nothing is listening on the serve port, stopping a `rojo serve` that a
+    killed studio-sync left there. Called with the reply port held, so no other studio-sync
+    is running: a server still on a studio-sync wrapper project belongs to nobody, and the
+    plugin would be answered by it - with that run's project and owner - instead of ours."""
+    if serve_port_free():
+        return
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = f.read().decode(errors="replace").split("\0")
+        except OSError:
+            continue
+        work = next((os.path.dirname(arg) for arg in argv if os.path.basename(arg) == WRAPPER_NAME), None)
+        if not work or not os.path.basename(work).startswith(WORK_PREFIX) or "serve" not in argv:
+            continue
+        print(f"studio-sync: stopping a `rojo serve` left behind by an earlier run (pid {pid})", file=sys.stderr)
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except OSError:
+            pass
+        shutil.rmtree(work, ignore_errors=True)
+    deadline = time.monotonic() + 5
+    while not serve_port_free():
+        if time.monotonic() > deadline:
+            sys.exit(f"studio-sync: port {SERVE_PORT} is taken by something other than studio-sync")
+        time.sleep(0.2)
 
 
 def rojo_command():
@@ -253,9 +300,12 @@ def wait_for_server(port, process, seconds):
             return None
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/rojo", timeout=1) as response:
-                return response.read()
+                info = response.read()
         except OSError:
             time.sleep(0.2)
+            continue
+        # An answer with our own server gone came from someone else's.
+        return info if process.poll() is None else None
     return None
 
 
@@ -292,6 +342,7 @@ def serve_request(name):
         def log_message(self, *args):
             pass
 
+    claim_serve_port()
     try:
         server = ThreadingHTTPServer(("0.0.0.0", SERVE_PORT), Handler)
     except OSError:
@@ -312,7 +363,7 @@ def wait_for_result(reply, seconds, what):
 
 def list_studios(args):
     reply = Reply(collect_only=True)
-    server = take_turn(make_handler(reply), args.timeout)
+    server = take_turn(make_handler(reply), args)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     request = serve_request(f"studio-sync list reply={REPLY_PORT}")
     try:
@@ -337,7 +388,7 @@ def list_studios(args):
 def release(owner, args):
     explicit, unique, wanted = explicit_choice(args)
     reply = Reply(explicit, unique)
-    server = take_turn(make_handler(reply), args.timeout)
+    server = take_turn(make_handler(reply), args)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     request = serve_request(f"studio-sync release owner={owner} reply={REPLY_PORT}")
     try:
@@ -417,6 +468,11 @@ def main():
     parser.add_argument("--list", action="store_true", help="list the open Studios instead of syncing")
     args = parser.parse_args()
 
+    # A kill that isn't Ctrl-C (an agent's tool timeout, a closed terminal) runs the same
+    # cleanup: `rojo serve` must not outlive the run.
+    for number in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, lambda received, _frame: sys.exit(128 + received))
+
     if args.list:
         return list_studios(args)
     if args.release:
@@ -431,21 +487,23 @@ def main():
     explicit, unique, wanted = explicit_choice(args)
     restrictions = place_restrictions(project)
     reply = Reply(explicit, unique, restriction_test(restrictions))
-    server = take_turn(make_handler(reply), args.timeout)
+    server = take_turn(make_handler(reply), args)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    work = tempfile.mkdtemp(prefix="studio-sync-")
-    wrapper = os.path.join(work, "studio-sync.project.json")
-    with open(wrapper, "w") as f:
-        json.dump({"name": f"studio-sync owner={owner} reply={REPLY_PORT}", "tree": {"$path": project},
-                   **restrictions}, f)
-
-    log = open(os.path.join(work, "rojo.log"), "w+")
-    rojo = subprocess.Popen(
-        rojo_command() + ["serve", wrapper, "--address", "0.0.0.0", "--port", str(SERVE_PORT)],
-        cwd=project_dir, stdout=log, stderr=subprocess.STDOUT,
-    )
+    claim_serve_port()
+    work = tempfile.mkdtemp(prefix=WORK_PREFIX)
+    rojo = None
     try:
+        wrapper = os.path.join(work, WRAPPER_NAME)
+        with open(wrapper, "w") as f:
+            json.dump({"name": f"studio-sync owner={owner} reply={REPLY_PORT}", "tree": {"$path": project},
+                       **restrictions}, f)
+
+        log = open(os.path.join(work, "rojo.log"), "w+")
+        rojo = subprocess.Popen(
+            rojo_command() + ["serve", wrapper, "--address", "0.0.0.0", "--port", str(SERVE_PORT)],
+            cwd=project_dir, stdout=log, stderr=subprocess.STDOUT,
+        )
         info = wait_for_server(SERVE_PORT, rojo, 30)
         started = time.monotonic()
         if info is None:
@@ -461,11 +519,12 @@ def main():
         # already changing the place, and a large project's first sync takes minutes.
         wait_for_result(reply, args.finish_timeout, "sync")
     finally:
-        rojo.terminate()
-        try:
-            rojo.wait(5)
-        except subprocess.TimeoutExpired:
-            rojo.kill()
+        if rojo:
+            rojo.terminate()
+            try:
+                rojo.wait(5)
+            except subprocess.TimeoutExpired:
+                rojo.kill()
         server.shutdown()
         shutil.rmtree(work, ignore_errors=True)
 
