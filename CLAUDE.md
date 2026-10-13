@@ -380,7 +380,10 @@ virtual desktop filling the screen above waybar. Each piece is load-bearing:
   (`desktop-resize-service.sh`) polls the output, waits for it to settle (a dragged
   browser window sends a burst), updates `"Default"` and Vinegar's `virtual_desktop`, and
   when Studio is up runs `desktop-resize.exe` (built from `config/desktop-resize/` in its
-  own Dockerfile stage) inside Studio's desktop. It does the same for every newly launched
+  own Dockerfile stage) inside every Studio desktop, one after the other — Vinegar names each
+  launch's desktop with a fresh UUID, so two open places are two desktops, and a resize done
+  in one leaves the other half-resized at best (measured: its X window followed a shrink
+  but not a grow, the windows in it neither). It does the same for every newly launched
   Studio desktop, writing `"Default"` through the now-running wineserver first — the only
   way a fresh install's first launch (prefix and desktop created back to back) or a
   recreated prefix gets the right size. The tool reports `ok`/`refused` through
@@ -448,9 +451,6 @@ relaunch Studio. Docking and floating-panel resizing break again; everything els
 - On a fresh install's first launch, the resize that shrinks the fullscreen desktop to the
   area above waybar can leave an unrepainted white strip near the desktop's bottom until
   something redraws there.
-- Not tested: a second `vinegar run` while Studio is up. Vinegar names every desktop with a
-  fresh UUID, so it may open a second Wine desktop window rather than join the first
-  (`desktop-resize` only follows the first one `pgrep` finds).
 
 **Debugging it again**: drive the session with a scripted RFB client
 (`vncdotool` from PyPI: `vncdo -s 127.0.0.1::<port> move X Y mousedown 1 ... mouseup 1`) and

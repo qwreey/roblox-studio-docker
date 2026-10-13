@@ -19,10 +19,11 @@ current_screen() {
   wlr-randr --output HEADLESS-1 2>/dev/null | sed -n 's/^[[:space:]]*\([0-9]\+x[0-9]\+\) px.*(current).*/\1/p' | head -n1
 }
 
-# Studio's desktop, if it's up: Vinegar launches it as `explorer /desktop=<uuid>,WxH`
+# Every Studio desktop that is up, one pid per line: Vinegar launches each Studio as
+# `explorer /desktop=<uuid>,WxH`, a new uuid every time, so two open places are two desktops
 # (our own `explorer /desktop=<uuid> <program>` launches below have no `,` and don't match).
-studio_desktop_pid() {
-  pgrep -f 'explorer\.exe /desktop=[^,]+,' | head -n1
+studio_desktop_pids() {
+  pgrep -f 'explorer\.exe /desktop=[^,]+,'
 }
 
 # Resizes the running desktop (pid $2) to SIZE ($1) from inside it.
@@ -46,31 +47,32 @@ resize_studio_desktop() {
     sleep 0.2
   done
   case "$(cat "${STATUS_FILE}" 2>/dev/null)" in
-    ok) echo "[desktop-resize] Studio's desktop resized to ${size}" ;;
+    ok) echo "[desktop-resize] Studio's desktop ${desktop} resized to ${size}" ;;
     refused) echo "[desktop-resize] Wine refused a ${size} desktop - Explorer\\Desktops \"Default\" probably isn't ${size}" >&2; return 1 ;;
     *) echo "[desktop-resize] desktop-resize.exe didn't report back within 15s (resizing to ${size})" >&2; return 1 ;;
   esac
 }
 
 applied_screen=""   # screen size Vinegar's config (and, once it exists, the prefix) was set for
-applied_desktop=""  # Studio desktop pid last resized to it
 default_pending=0   # the prefix didn't exist yet when the screen size was applied
-seen_desktop=""     # Studio desktop pid first seen at seen_at - left alone while it starts up
-seen_at=0
+declare -A seen_at=()  # Studio desktop pid -> when it was first seen; left alone while it starts up
+declare -A applied=()  # Studio desktop pid -> the size it was last resized to
 while true; do
   screen="$(current_screen)"
-  desktop_pid="$(studio_desktop_pid)"
-  if [[ "${desktop_pid}" != "${seen_desktop}" ]]; then
-    seen_desktop="${desktop_pid}"
-    seen_at="${SECONDS}"
-  fi
+  mapfile -t desktop_pids < <(studio_desktop_pids)
+  for pid in "${!seen_at[@]}"; do
+    [[ " ${desktop_pids[*]} " == *" ${pid} "* ]] || unset "seen_at[${pid}]" "applied[${pid}]"
+  done
+  for pid in "${desktop_pids[@]}"; do
+    [[ -n "${seen_at[${pid}]:-}" ]] || seen_at[${pid}]="${SECONDS}"
+  done
 
   if [[ -n "${screen}" && "${screen}" != "${applied_screen}" ]]; then
     # A browser window being dragged produces a burst of sizes; act on the one it settles on.
     sleep 0.8
     [[ "$(current_screen)" == "${screen}" ]] || continue
     applied_screen="${screen}"
-    applied_desktop=""
+    applied=()
     if size="$(desktop_size_for_screen "${screen}")" && virtual_desktop_enabled; then
       set_vinegar_desktop_size "${size}"
       default_pending=1
@@ -91,16 +93,19 @@ while true; do
         *) echo "[desktop-resize] could not set Wine's default desktop size to ${size}" >&2; default_pending=0 ;;
       esac
     fi
+    # Each desktop is resized from inside itself. A resize done in one leaves the others
+    # half-resized at best: measured with two, the other desktop's X window followed a
+    # shrink but not a grow, and the windows in it followed neither.
     # A desktop that is simply new gets resized too, not only one that was already up when
     # the screen changed - it may have come up before its prefix had the right "Default" (a
     # fresh install's first launch creates the prefix and the desktop back to back, or a
     # prefix was recreated), so "Default" is written first, through the now-running wineserver.
-    if [[ -n "${desktop_pid}" && "${desktop_pid}" != "${applied_desktop}" ]] \
-       && (( SECONDS - seen_at >= 3 )); then
+    for pid in "${desktop_pids[@]}"; do
+      [[ "${applied[${pid}]:-}" != "${size}" ]] && (( SECONDS - ${seen_at[${pid}]} >= 3 )) || continue
       set_wine_default_desktop_size "${size}" && default_pending=0
-      resize_studio_desktop "${size}" "${desktop_pid}"
-      applied_desktop="${desktop_pid}"
-    fi
+      resize_studio_desktop "${size}" "${pid}"
+      applied[${pid}]="${size}"
+    done
   fi
   sleep 0.5
 done
