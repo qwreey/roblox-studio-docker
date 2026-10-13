@@ -27,7 +27,7 @@ cursor hint, which is surface-synced state and is frequently not applied yet whe
 Xwayland destroys the lock a few milliseconds later. We saw this with explicit sync in
 use. Xwayland is the one place that sees the warp and the following motion in order.
 
-**Suggested fix** (what we run, ~70 lines): for motion frames with an absolute position but
+**Suggested fix** (what we run, ~150 lines): for motion frames with an absolute position but
 no `zwp_relative_pointer_v1` motion (an absolute-only device), remember the last position.
 Once a client has warped (`CursorWarpedTo`), apply the device's movement since that
 position to the sprite's current (warped) position instead of using the absolute position.
@@ -40,6 +40,19 @@ Relative-only frames (sent while a lock is up) advance the remembered position, 
 frame with both kinds of motion marks the device as relative and turns this off. With
 it, the same drags sum to N regardless of step count, and the pointer is back under the
 viewer's after the drag.
+
+**The lock outlives the capture.** The warp emulator's lock stays up for as long as the
+cursor is hidden, and a locked pointer gets relative motion only (from our labwc patch;
+stock labwc sends an absolute-only device's motion nowhere while locked). A client that
+draws its own cursor and warps only while a button drags its camera (the same editor's
+play mode) then has the X pointer trail the viewer's by the drag's length until the
+cursor shows again. So the patch also ends the capture itself, destroying the emulator
+and queuing an absolute motion to the device's tracked position: 200 ms after the last
+button is up (on a timer, so the client's own cursor doesn't sit at the drag's start
+until the viewer moves) when the client only ever warped with a button held, and after
+500 ms of motion without an answering warp when it warps with none held (mouse-look).
+Not sooner than 200 ms after a button event, since the client still reads motion as its
+drag until its next frame, and never for a lock taken for a hidden cursor's confinement.
 
 **Repro without the editor:** `camprobe.c` next to this file (a Win32 program doing the
 same warp-to-anchor loop), in a Wine virtual desktop under Xwayland, driven by any VNC

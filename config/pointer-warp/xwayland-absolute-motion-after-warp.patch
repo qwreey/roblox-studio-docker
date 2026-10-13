@@ -9,7 +9,7 @@
      dx = xwl_seat->focus_window->toplevel->drawable.x;
      dy = xwl_seat->focus_window->toplevel->drawable.y;
  
-@@ -662,6 +664,82 @@
+@@ -662,6 +664,195 @@
                                              dx_unaccel, dy_unaccel);
  }
  
@@ -89,10 +89,123 @@
 +    xwl_seat->abs_motion.last_y += (int) dy;
 +}
 +
++/*
++ * Xwayland keeps its warp emulator's pointer lock up for as long as the
++ * cursor stays hidden, and a locked pointer moves by relative motion alone.
++ * With a relative device that is all there is to it.  With an absolute-only
++ * one the pointer is then left wherever the client's last warp put it: a
++ * client that draws its own cursor (so the X cursor is hidden throughout)
++ * and warps only while a button drags its camera would, after the drag,
++ * have the pointer trail the viewer's by the length of that drag until
++ * something else took the lock down.
++ *
++ * So tell when the client has stopped capturing the pointer; the caller
++ * then drops the lock and puts the pointer back at the device's own
++ * position:
++ *  - a client that only warped with a button held (a drag) is done
++ *    BUTTON_SETTLE_MS after the last button is up, on a timer, or it would
++ *    show its own cursor where the drag began until the viewer moved again;
++ *  - one that warps with no button held (mouse-look) is done once motion
++ *    has gone WARP_ANSWER_MS without a warp answering it.  Counting from
++ *    the motion rather than from the last warp keeps a pause in the motion
++ *    from ending it, whether the client warps every frame or only when the
++ *    pointer moved.
++ *
++ * Neither is decided within BUTTON_SETTLE_MS of a button event.  A client
++ * goes on reading motion as its drag for a moment after the release (until
++ * its next frame) and would take the pointer's way back for one more, long,
++ * move of its camera; and a warp it makes right after the release is not
++ * mouse-look.
++ *
++ * A lock that is up for a hidden cursor's confinement is left alone: that
++ * client reads relative motion and need not warp at all.
++ */
++#define WARP_ANSWER_MS 500
++#define BUTTON_SETTLE_MS 200
++
++void
++xwl_seat_client_warped_pointer(struct xwl_seat *xwl_seat)
++{
++    xwl_seat->abs_motion.warped = TRUE;
++    xwl_seat->abs_motion.waiting = FALSE;
++
++    if (!xwl_seat->abs_motion.buttons &&
++        GetTimeInMillis() - xwl_seat->abs_motion.button_time >= BUTTON_SETTLE_MS)
++        xwl_seat->abs_motion.look = TRUE;
++}
++
++static Bool
++xwl_seat_warp_capture_idle(struct xwl_seat *xwl_seat)
++{
++    return xwl_seat->abs_motion.valid &&
++        !xwl_seat->abs_motion.buttons &&
++        GetTimeInMillis() - xwl_seat->abs_motion.button_time >= BUTTON_SETTLE_MS &&
++        !xwl_seat->cursor_confinement_window;
++}
++
++static Bool
++xwl_seat_warp_capture_ended(struct xwl_seat *xwl_seat)
++{
++    CARD32 now = GetTimeInMillis();
++
++    if (!xwl_seat_warp_capture_idle(xwl_seat))
++        return FALSE;
++
++    if (!xwl_seat->abs_motion.look)
++        return TRUE;
++
++    /* Motion that moved nothing is nothing for the client to answer. */
++    if (xwl_seat->pending_pointer_event.dx == 0 &&
++        xwl_seat->pending_pointer_event.dy == 0)
++        return FALSE;
++
++    if (!xwl_seat->abs_motion.waiting) {
++        xwl_seat->abs_motion.waiting = TRUE;
++        xwl_seat->abs_motion.waiting_since = now;
++    }
++
++    return now - xwl_seat->abs_motion.waiting_since >= WARP_ANSWER_MS;
++}
++
++static void
++xwl_seat_end_warp_capture(struct xwl_seat *xwl_seat)
++{
++    ValuatorMask mask;
++
++    xwl_seat_destroy_pointer_warp_emulator(xwl_seat);
++    xwl_seat->abs_motion.warped = FALSE;
++    xwl_seat->abs_motion.relative = FALSE;
++
++    valuator_mask_zero(&mask);
++    valuator_mask_set(&mask, 0, xwl_seat->abs_motion.last_x);
++    valuator_mask_set(&mask, 1, xwl_seat->abs_motion.last_y);
++    QueuePointerEvents(xwl_seat->pointer, MotionNotify, 0,
++                       POINTER_ABSOLUTE | POINTER_SCREEN, &mask);
++}
++
++static CARD32
++xwl_seat_settle_timer(OsTimerPtr timer, CARD32 now, void *arg)
++{
++    struct xwl_seat *xwl_seat = arg;
++    CARD32 since = now - xwl_seat->abs_motion.button_time;
++
++    if (!xwl_seat->pointer_warp_emulator || !xwl_seat->pointer ||
++        xwl_seat->abs_motion.buttons || xwl_seat->abs_motion.look)
++        return 0;
++
++    if (since < BUTTON_SETTLE_MS)
++        return BUTTON_SETTLE_MS - since;
++
++    if (xwl_seat_warp_capture_idle(xwl_seat))
++        xwl_seat_end_warp_capture(xwl_seat);
++
++    return 0;
++}
++
  static void
  dispatch_absolute_motion(struct xwl_seat *xwl_seat)
  {
-@@ -685,6 +763,9 @@
+@@ -685,6 +876,9 @@
      x = drawable_x + event_x;
      y = drawable_y + event_y;
  
@@ -102,17 +215,22 @@
      valuator_mask_zero(&mask);
      valuator_mask_set(&mask, 0, x);
      valuator_mask_set(&mask, 1, y);
-@@ -764,6 +845,9 @@
+@@ -764,7 +958,13 @@
      Bool has_relative = xwl_seat->pending_pointer_event.has_relative;
      Bool has_absolute = xwl_seat->pending_pointer_event.has_absolute;
  
+-    if (xwl_seat->pointer_warp_emulator && has_relative) {
 +    if (has_relative)
 +        xwl_seat_follow_relative_motion(xwl_seat, has_absolute);
 +
-     if (xwl_seat->pointer_warp_emulator && has_relative) {
++    if (xwl_seat->pointer_warp_emulator && has_relative && !has_absolute &&
++        xwl_seat_warp_capture_ended(xwl_seat)) {
++        xwl_seat_end_warp_capture(xwl_seat);
++    } else if (xwl_seat->pointer_warp_emulator && has_relative) {
          dispatch_relative_motion_with_warp(xwl_seat);
      } else {
-@@ -832,6 +916,11 @@
+         if (has_relative)
+@@ -832,6 +1032,16 @@
          break;
      }
  
@@ -120,13 +238,35 @@
 +        xwl_seat->abs_motion.buttons |= 1u << (index & 31);
 +    else
 +        xwl_seat->abs_motion.buttons &= ~(1u << (index & 31));
++    xwl_seat->abs_motion.button_time = GetTimeInMillis();
++    if (!xwl_seat->abs_motion.buttons && xwl_seat->pointer_warp_emulator)
++        xwl_seat->abs_motion.settle_timer =
++            TimerSet(xwl_seat->abs_motion.settle_timer, 0, BUTTON_SETTLE_MS,
++                     xwl_seat_settle_timer, xwl_seat);
 +
      valuator_mask_zero(&mask);
      QueuePointerEvents(get_pointer_device(xwl_seat),
                         state ? ButtonPress : ButtonRelease, index, 0, &mask);
+@@ -2012,6 +2222,7 @@
+     release_tablet_manager_seat(xwl_seat);
+ 
+     release_grab(xwl_seat);
++    TimerFree(xwl_seat->abs_motion.settle_timer);
+     wl_seat_destroy(xwl_seat->seat);
+     xwl_cursor_release(&xwl_seat->cursor);
+     wl_array_release(&xwl_seat->keys);
+@@ -3548,6 +3759,8 @@
+ 
+     xwl_pointer_warp_emulator_destroy(xwl_seat->pointer_warp_emulator);
+     xwl_seat->pointer_warp_emulator = NULL;
++    xwl_seat->abs_motion.look = FALSE;
++    xwl_seat->abs_motion.waiting = FALSE;
+ 
+     if (xwl_seat->cursor_confinement_window) {
+         xwl_seat_confine_pointer(xwl_seat,
 --- a/hw/xwayland/xwayland-input.h
 +++ b/hw/xwayland/xwayland-input.h
-@@ -123,6 +123,17 @@
+@@ -123,6 +123,24 @@
          Bool has_horizontal_scroll_v120;
      } pending_pointer_event;
  
@@ -139,18 +279,34 @@
 +        Bool warped;    /* a client warped the pointer since that event */
 +        Bool relative;  /* that event was applied relative to a warp */
 +        uint32_t buttons; /* held buttons, by X button number */
++        /* While the warp emulator's pointer lock is up, see
++         * xwl_seat_warp_capture_ended() */
++        CARD32 button_time; /* when a button last went down or up */
++        OsTimerPtr settle_timer; /* ends a drag's capture after its release */
++        Bool look;      /* the client warps with no button held */
++        Bool waiting;   /* motion since the client's last warp ... */
++        CARD32 waiting_since; /* ... the first of it at this time */
 +    } abs_motion;
 +
      struct xorg_list tablets;
      struct xorg_list tablet_tools;
      struct xorg_list tablet_pads;
+@@ -207,6 +225,8 @@
+ 
+ void xwl_seat_destroy_pointer_warp_emulator(struct xwl_seat *xwl_seat);
+ 
++void xwl_seat_client_warped_pointer(struct xwl_seat *xwl_seat);
++
+ void xwl_seat_cursor_visibility_changed(struct xwl_seat *xwl_seat);
+ 
+ void xwl_seat_confine_pointer(struct xwl_seat *xwl_seat,
 --- a/hw/xwayland/xwayland-screen.c
 +++ b/hw/xwayland/xwayland-screen.c
 @@ -307,6 +307,8 @@
      if (!xwl_seat)
          return;
  
-+    xwl_seat->abs_motion.warped = TRUE;
++    xwl_seat_client_warped_pointer(xwl_seat);
 +
      if (!window)
          window = XYToWindow(sprite, x, y);

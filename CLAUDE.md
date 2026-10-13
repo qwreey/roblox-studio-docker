@@ -511,6 +511,25 @@ one move.
     next event without a button held puts the pointer back under the viewer's.
     Xwayland is the one place that sees the warps and the motion in order, so this has no
     race.
+  - **Xwayland, once the drag is over**: its warp emulator keeps the pointer lock up for
+    as long as the cursor stays hidden, and a locked pointer takes relative motion only.
+    In play mode Studio draws its own cursor, so the X cursor is hidden over the whole
+    viewport: after a right-drag the pointer stayed the drag's length away from the
+    viewer's until it left the viewport (where a cursor shows again). The patch drops the
+    lock and puts the pointer at the viewer's position once the client has stopped
+    capturing it:
+    - a client that only warped with a button held (a drag): 200 ms after the last
+      button is up, on a timer. Waiting for the viewer's next move instead left Studio's
+      own cursor at the drag's start, beside the viewer's, for as long as nothing moved;
+    - one that warps with no button held (first person's mouse-look): after 500 ms of
+      motion that no warp answered. Counted from the motion, not the last warp, so a
+      pause doesn't end it.
+    - Neither sooner than those 200 ms after a button event. Studio still reads motion
+      as its drag for a frame after the release, and would turn the camera by the
+      pointer's whole way back; and its one warp right after the release is not
+      mouse-look.
+    - A lock held for a hidden cursor's confinement is left alone (that client reads
+      relative motion and needn't warp).
   - **labwc**: while the pointer is locked, send an absolute device's movement as relative
     motion instead of dropping it. Studio's camera doesn't need this; a client that keeps
     the cursor hidden (and so the lock up) did not move at all without it.
@@ -547,11 +566,29 @@ one move.
     device's `buttonsDown`, which is still 0 at that point. The patch now tracks held
     buttons from the `wl_pointer.button` events: two 40 px drags gave -32° in 10 of 10
     runs (3 of 6 wrong before).
+- **In play mode** (viewer position against `XQueryPointer`, the view by comparing
+  screenshots of a strip of the baseplate; scripted over one RFB connection, since
+  reconnecting resets the pointer):
+  - Before: a (200,60) px right-drag left the X pointer exactly (-200,-60) from the
+    viewer's through every later move inside the viewport.
+  - Now it is under the viewer's by the time it is read after the release (~0.25 s), with
+    no move in between and the view unchanged; a left click there lands there. A second
+    press 0.1 s after the release starts its drag in place and the timer leaves it alone
+    (+40 px in 4 events then -40 in 40 ends on the same view). Moving on right at the
+    release, the camera turns a little further in the first 200 ms (Studio reading that
+    motion as drag), not when the pointer lands.
+  - First person: +40 px in 4 events, a 1.5 s pause, then -40 px in 40 events ends on the
+    starting view; so does +80, a click, 1 s, -80, and the pointer stays at the centre
+    through a click or a right-drag and the second after it. Zoomed back out, the pointer
+    is under the viewer's again within about a second of moving.
+  - Edit mode unchanged: +40 px in 4 events then -40 in 40, and +400 in 100 then -400 in
+    20, both end on the starting view.
 - **Not covered**: a drag still ends at the edge of the viewer's window, since nothing
   recentres the viewer's own pointer (that would need browser Pointer Lock in noVNC plus a
-  relative-motion RFB extension wayvnc doesn't have). And a client that warps the pointer
-  with no button held while several events land between two of its warps (a game's
-  mouse-look) gets one jump per such event.
+  relative-motion RFB extension wayvnc doesn't have). And a client that warps a *visible*
+  cursor with no button held while several events land between two of its warps gets one
+  jump per such event (with the cursor hidden the lock stays up and it gets relative
+  motion, as first person does).
 - **Escape hatch**: `VNC_POINTER_WARP_FIX=false` runs the distro labwc and Xwayland
   (`labwc-service.sh`). The winex11 fix has no switch; it only drops events that were
   never pointer motion. Upstream drafts: `research/upstream-reports/xwayland-absolute-motion-after-warp.md`,
