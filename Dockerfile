@@ -396,7 +396,7 @@ COPY --from=pointer-warp-build /out/labwc /out/Xwayland /usr/local/bin/
 # would break VNC_BIND_ALIAS. netshare comes along only for its wait_until
 # helper, which dns-local uses for a bounded, well-logged first wait on
 # router (it retries fine without it, the log is just less obvious).
-ARG ROUTER_CLIENT_REF=v0.1.0
+ARG ROUTER_CLIENT_REF=v0.1.1
 ADD https://github.com/qwreey/router-docker-client.git#${ROUTER_CLIENT_REF}:dns-local /etc/roblox-studio/router-client/dns-local
 ADD https://github.com/qwreey/router-docker-client.git#${ROUTER_CLIENT_REF}:netshare /etc/roblox-studio/router-client/netshare
 RUN chmod +x /etc/roblox-studio/router-client/dns-local/dns-local.sh
