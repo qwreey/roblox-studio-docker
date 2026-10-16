@@ -5,15 +5,21 @@
 ARG KOMBUCHA_WINE_VERSION=wine-11.19
 ARG KOMBUCHA_PATCHES_REF=cdf42b8f1f3a87d8952e072d6a46a0d6aef659e6
 
-# desktop-resize.exe - the Windows-side half of keeping Studio's Wine virtual desktop the
-# size of the screen (config/desktop-resize/desktop-resize.c, run by
-# desktop-resize-service.sh). Built in its own stage so the mingw toolchain never reaches
-# the runtime image.
-FROM archlinux:latest AS desktop-resize-build
+# The Windows programs run inside Studio's Wine desktop, built in their own stage so the
+# mingw toolchain never reaches the runtime image:
+# - desktop-resize.exe, the Windows-side half of keeping Studio's Wine virtual desktop the
+#   size of the screen (config/desktop-resize/desktop-resize.c, run by
+#   desktop-resize-service.sh);
+# - script-analysis.exe, which reads Studio's Script Analysis window
+#   (config/script-analysis/script-analysis.c, run by script-analysis-service.py).
+FROM archlinux:latest AS win32-tools-build
 RUN pacman -Syu --noconfirm --needed mingw-w64-gcc
 COPY config/desktop-resize/desktop-resize.c /src/desktop-resize.c
 RUN x86_64-w64-mingw32-gcc -municode -mwindows -O2 -s -Wall -Werror \
       -o /src/desktop-resize.exe /src/desktop-resize.c -luser32 -lshell32
+COPY config/script-analysis/script-analysis.c /src/script-analysis.c
+RUN x86_64-w64-mingw32-gcc -municode -mwindows -O2 -s -Wall -Werror \
+      -o /src/script-analysis.exe /src/script-analysis.c -lole32 -loleaut32 -luuid
 
 # StudioSync.rbxm - the Studio half of studio-sync (config/studio-sync/): Rojo's own plugin
 # at the same release, with its UI entry point swapped (plugin/build.sh). The plugin talks
@@ -353,7 +359,7 @@ RUN chmod +x /usr/local/bin/mcp-bridge.sh /usr/local/bin/studio-mcp-stdio.sh /us
 RUN mkdir -p /etc/roblox-studio/supervisord.d \
       /var/log/dbus /var/log/labwc /var/log/wayvnc /var/log/novnc /var/log/mcp-bridge /var/log/critical-watchdog \
       /var/log/dns-local /var/log/desktop-resize /var/log/wine-owned-popups /var/log/studio-plugins /var/log/studio-output \
-      /var/log/studio-mcp-host
+      /var/log/studio-mcp-host /var/log/script-analysis
 COPY config/supervisord.conf /etc/roblox-studio/supervisord.conf
 COPY config/supervisord.d/*.conf /etc/roblox-studio/supervisord.d/
 COPY config/supervisor/wait-for-wayland.sh /etc/roblox-studio/wait-for-wayland.sh
@@ -368,10 +374,11 @@ COPY config/supervisor/dns-local-service.sh /etc/roblox-studio/dns-local-service
 COPY config/supervisor/studio-wine.sh /etc/roblox-studio/studio-wine.sh
 COPY config/supervisor/desktop-size.sh /etc/roblox-studio/desktop-size.sh
 COPY config/supervisor/desktop-resize-service.sh /etc/roblox-studio/desktop-resize-service.sh
-COPY --from=desktop-resize-build /src/desktop-resize.exe /usr/local/lib/roblox-studio/desktop-resize.exe
+COPY --from=win32-tools-build /src/desktop-resize.exe /src/script-analysis.exe /usr/local/lib/roblox-studio/
 COPY config/supervisor/wine-owned-popups-service.sh /etc/roblox-studio/wine-owned-popups-service.sh
 COPY config/supervisor/studio-plugins-service.sh /etc/roblox-studio/studio-plugins-service.sh
 COPY config/studio-output/studio-output-service.py /usr/local/lib/roblox-studio/studio-output-service.py
+COPY config/script-analysis/script-analysis-service.py /usr/local/lib/roblox-studio/script-analysis-service.py
 COPY --from=studio-sync-plugin-build /src/StudioSync.rbxm /usr/local/lib/roblox-studio/StudioSync.rbxm
 COPY --from=luau-lsp-plugin-build /src-luau-lsp/LuauLSP.rbxm /usr/local/lib/roblox-studio/LuauLSP.rbxm
 # Built here rather than in a separate stage: gcc (base-devel) and libX11 are already in

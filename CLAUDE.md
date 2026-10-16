@@ -1325,6 +1325,69 @@ process (measured: a `print` in a synced server Script showed up during F5).
 - **`config/studio-output/studio-output`** (CLI) is mounted into code-docker by the
   overlay, the same way as studio-sync.
 
+## script-analysis: Studio's Script Analysis window from code-docker — 2026-10-16
+
+`studio-analysis`, run in code-docker, prints what Studio's Script Analysis window lists
+(type errors, lint warnings) for every script in each open place. No plugin or MCP API
+returns these, so it reads the window itself through Qt's UI Automation provider: no keys,
+no clipboard, and the real pointer never moves.
+
+**Pieces**, all in `config/script-analysis/`:
+
+- **`script-analysis.c`** (built in the Dockerfile's `win32-tools-build` stage) runs inside
+  a Studio's Wine desktop and writes the rows to a file. Its header comment lists the steps.
+- **`script-analysis-service.py`** (supervisord `script-analysis`) runs it in every Studio
+  desktop on `GET /read`, one read at a time, served on `127.0.0.1:8810`. Caddy serves it
+  at `studio:8787/script-analysis/` behind the MCP token, like studio-output.
+- **`studio-analysis`** (CLI) is mounted into code-docker by the overlay, the same way as
+  studio-sync. `mcp-shared-notice.md` points agents at it.
+
+**Why it is built this way** (all measured on the test stack):
+
+- **UIA, not MSAA.** Studio ships Qt 5.15.9, whose Windows plugin only has the UIA
+  provider; `AccessibleObjectFromWindow` got Wine's default window proxy with no Qt
+  content.
+- **Wine's UIA client is partial.** `RawViewWalker`, `CurrentClassName`,
+  `GetCurrentPropertyValue` and `GetCurrentPatternAs` are stubs, and of the pattern
+  properties only Value.IsReadOnly and two LegacyIAccessible ones are read
+  (`uia_provider_get_pattern_prop_val`). `CreateTreeWalker(TrueCondition)`, `CurrentName`,
+  `CurrentControlType`, `CurrentBoundingRectangle` and `GetCurrentPropertyValueEx` work.
+- **About 30 ms per cross-process call.** Walking Studio's whole tree (~150 nodes) takes
+  ~4 s, so other trees (Explorer, Properties) are never walked into. A read takes 15-25 s
+  in total, most of it in those walks.
+- **Only rows in the viewport.** Qt's provider skips rows it marks invisible, which is
+  every row scrolled out of the tree's viewport. Its Grid pattern would reach all of them,
+  but that is one of the Wine stubs. So the reader pages through with `WM_MOUSEWHEEL`
+  posted to the window: Qt takes the position from the message, so neither the pointer
+  nor the focus moves. A notch is 3 rows (40 per row).
+  - Measured: 87 rows (84 entries in three identical scripts) read in full, and the
+    scroll position restored pixel-for-pixel.
+  - Qt also counts a row or two above the viewport as visible, which first left the
+    restored list two rows too high. The reader now measures that and scrolls it off.
+- **Collapsed script groups** have no rows for their entries in Qt's model. They are
+  reported, not expanded: expanding takes a click on the tree, which would also take
+  Studio's keyboard focus.
+- **Hidden windows aren't in the accessibility tree at all.** The reader clicks the
+  window's tab with posted mouse messages, then puts it back.
+  - A **side tab** (the window collapsed to the edge): a second click closes it again.
+    The overlay stays open while the real pointer is elsewhere, but closes if someone
+    moves the pointer over Studio mid-read; the reader then notes that rows may be
+    missing.
+  - A **dock tab**: the tab that was showing is clicked back. It is found by comparing
+    the names under the tab bar's parent before and after each click, since Wine reads
+    no SelectionItem state. Measured with Toolbox in front: read, and Toolbox back in
+    front.
+- **A closed window can't be opened from outside.** It has no tab. Window > Script >
+  Analysis is a submenu, and Qt's popup menus ignored every posted click, move and key
+  (the menu bar itself took the click). The CLI says to ask the person at Studio's screen.
+  - Launching another Windows program in the desktop deactivates Studio, and Qt closes
+    any open popup menu. Steps that need a menu to stay open belong in one process.
+
+**Rejected first: a keyboard macro.** Menu key, Enter, Enter copies one entry, Down moves to
+the next, and the clipboard is read each time. It needed Studio's focus for the whole run,
+went through the clipboard (which VNC shares with the viewer), and couldn't read a hidden
+window any more than this can.
+
 ## studio-sync: one-shot Rojo syncs for agents — 2026-10-06
 
 Before this, an agent could not get a Rojo project into Studio on its own. Connecting

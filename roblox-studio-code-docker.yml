@@ -125,6 +125,10 @@ services:
       # 마운트 방식은 studio-sync와 같은 이유.
       - "./config/studio-output:/usr/local/lib/studio-output:ro"
       - "./config/studio-output/launcher.sh:/usr/local/bin/studio-output:ro"
+      # studio-analysis CLI - Studio의 Script Analysis 창 내용을 출력한다(MCP_TOKEN 필요).
+      # 마운트 방식은 studio-sync와 같은 이유.
+      - "./config/script-analysis:/usr/local/lib/studio-analysis:ro"
+      - "./config/script-analysis/launcher.sh:/usr/local/bin/studio-analysis:ro"
 
   # code-docker 쪽에 이미 정의된 서비스에 필드만 추가 병합 (include 병합은 서비스
   # 이름 기준으로 동작 - "이 파일에서 정의한 서비스만" 이라는 제약 없음, code-docker

@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Print what Roblox Studio's Script Analysis window lists, from code-docker.
+
+Reads script-analysis-service.py through the MCP bridge (same port and bearer token, path
+/script-analysis), so it needs MCP_TOKEN - the overlay hands it to code-docker. The window
+has to be open in Studio, docked, in a dock tab or collapsed to a side tab; a hidden one
+is shown for the read and hidden again.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+URL = os.environ.get("SCRIPT_ANALYSIS_URL", "http://studio:8787/script-analysis")
+# "Type Error: (5,5) Expected ..." - anything else in the list is a script's heading.
+ENTRY = re.compile(r"^[^:]+: \(\d+,\s*\d+\)")
+CLOSED = ("Script Analysis is closed in this Studio, and nothing outside Studio can open it. "
+          "Ask the person at Studio's screen to open it (Window > Script > Analysis); it can "
+          "stay docked, in a dock tab or collapsed to a side tab.")
+
+
+def show(studio):
+    print(f"== {studio.get('window') or 'Roblox Studio'}")
+    if "error" in studio:
+        print(f"studio-analysis: {studio['error']}")
+        return
+    if studio["status"] == "closed":
+        print(CLOSED)
+    rows = studio["rows"]
+    for i, row in enumerate(rows):
+        if ENTRY.match(row):
+            print(f"  {row}")
+        elif i + 1 == len(rows) or not ENTRY.match(rows[i + 1]):
+            print(f"{row}  (collapsed in Studio; expand it there to list its entries)")
+        else:
+            print(row)
+    if studio["summary"]:
+        print(", ".join(studio["summary"]))
+        if any(re.match(r"^(\d+) of (?!\1\b)\d+ ", s) for s in studio["summary"]):
+            print("(some are filtered out by the window's own buttons or 'Display only current script')")
+    for note in studio["notes"]:
+        print(f"note: {note}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--place", help="only the Studio whose window title contains this")
+    parser.add_argument("--json", action="store_true", help="print the service's JSON as is")
+    args = parser.parse_args()
+    if not os.environ.get("MCP_TOKEN"):
+        sys.exit("studio-analysis: MCP_TOKEN is not set - it's the token of Studio's MCP bridge, "
+                 "which this reads through")
+
+    request = urllib.request.Request(f"{URL}/read",
+                                     headers={"Authorization": f"Bearer {os.environ['MCP_TOKEN']}"})
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        sys.exit(f"studio-analysis: {URL} answered {error.code}"
+                 + (" - MCP_TOKEN doesn't match Studio's" if error.code == 401 else ""))
+    except OSError as error:
+        sys.exit(f"studio-analysis: can't reach {URL} ({error}) - is the studio container up with MCP_TOKEN set?")
+
+    studios = [s for s in result["studios"] if not args.place or args.place in s.get("window", "")]
+    if args.json:
+        print(json.dumps(dict(result, studios=studios), ensure_ascii=False, indent=2))
+        return 0
+    if "error" in result:
+        sys.exit(f"studio-analysis: {result['error']}")
+    if not studios:
+        sys.exit("studio-analysis: no Studio is open" + (f" with '{args.place}' in its title" if args.place else ""))
+    for i, studio in enumerate(studios):
+        if i:
+            print()
+        show(studio)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

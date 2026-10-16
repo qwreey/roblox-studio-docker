@@ -21,6 +21,12 @@
 			reverse_proxy 127.0.0.1:{$STUDIO_OUTPUT_PORT:8809}
 		}
 
+		# Studio's Script Analysis window for code-docker's `studio-analysis`
+		# (config/script-analysis/script-analysis-service.py).
+		handle_path /script-analysis/* {
+			reverse_proxy 127.0.0.1:{$SCRIPT_ANALYSIS_PORT:8810}
+		}
+
 		reverse_proxy 127.0.0.1:{$MCP_UPSTREAM_PORT}
 	}
 }
