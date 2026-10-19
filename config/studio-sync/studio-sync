@@ -146,6 +146,7 @@ class Reply:
         self.lock = threading.Lock()
         self.offers = {}                # studio id -> offer, in arrival order
         self.first_offer = None         # time.monotonic() of the first one
+        self.changes = 0                # counts new offers and changed ones
         self.outdated = set()           # places whose plugin predates offers
         self.late = []                  # offers that came after the choice and could have been it
         self.chosen = None
@@ -155,10 +156,16 @@ class Reply:
 
     def offer(self, body):
         studio = str(body.get("studio", "")).lower()
+        offer = {"studio": studio, "place": str(body.get("place", "?")), "placeId": str(body.get("placeId", "0"))}
         with self.lock:
+            # A place offers again every poll until it is answered, and a published one's
+            # name can change in between (the plugin asks Roblox for it in the background).
+            if studio in self.offers and not self.decided.is_set() and self.offers[studio] != offer:
+                self.offers[studio] = offer
+                self.changes += 1
             if studio not in self.offers:
-                self.offers[studio] = {"studio": studio, "place": str(body.get("place", "?")),
-                                       "placeId": str(body.get("placeId", "0"))}
+                self.offers[studio] = offer
+                self.changes += 1
                 if self.first_offer is None:
                     self.first_offer = time.monotonic()
                 if self.decided.is_set():
@@ -256,38 +263,59 @@ def choose(reply, started, seconds, what, wanted=None):
     """Waits for the place this run is for and returns its offer; exits when none of the
     open ones is it, or when more than one could be."""
     deadline = started + seconds
-    while not reply.decided.wait(0.1):
-        now = time.monotonic()
-        first = reply.first_offer
-        # Offers that began inside the first window are complete when it ends. A place
-        # that showed up later (Studio was still starting) opens a window of its own.
-        if first is not None and now >= (started if first <= started + OFFER_WINDOW else first) + OFFER_WINDOW:
-            break
-        if first is None and reply.outdated and now >= started + OFFER_WINDOW:
-            sys.exit(f"studio-sync: {outdated_note(reply)}")
-        if now >= deadline:
-            sys.exit(f"studio-sync: no Studio picked this up within {seconds:g}s - is Studio running with "
-                     "a place open and the StudioSync plugin installed (and its HTTP permission allowed)?")
-
-    if reply.decided.is_set():
-        return reply.chosen
-    with reply.lock:
-        offers = list(reply.offers.values())
-    if reply.outdated:
-        print(f"studio-sync: skipping {outdated_note(reply)}", file=sys.stderr)
-
-    candidates, wanted = offers, wanted or "a place open"
-    if reply.explicit:
-        candidates = [offer for offer in offers if reply.explicit(offer)]
-    elif reply.allowed:
-        candidates = [offer for offer in offers if reply.allowed(offer)]
+    wanted = wanted or "a place open"
+    if reply.allowed and not reply.explicit:
         wanted = "a place open that the project's servePlaceIds/blockedPlaceIds allow"
-    # decide() answers with an earlier choice if a place named by id offered just now.
-    chosen = reply.decide(candidates[0] if len(candidates) == 1 else None)
-    if chosen:
-        return chosen
-    if not candidates:
-        sys.exit(f"studio-sync: no Studio has {wanted}. Open:\n{listing(offers)}")
+    # Offers that arrived after this one are looked at in a window of their own.
+    window_from, waiting_note = started, False
+    while True:
+        while not reply.decided.wait(0.1):
+            now = time.monotonic()
+            first = reply.first_offer
+            # Offers that began inside the window are complete when it ends. A place that
+            # showed up later (Studio was still starting, or slow to answer) opens a window
+            # of its own.
+            if first is not None and now >= max(window_from, first) + OFFER_WINDOW:
+                break
+            if first is None and reply.outdated and now >= started + OFFER_WINDOW:
+                sys.exit(f"studio-sync: {outdated_note(reply)}")
+            if now >= deadline:
+                if reply.offers:
+                    sys.exit(f"studio-sync: no Studio had {wanted} within {seconds:g}s. Open:\n"
+                             f"{listing(reply.offers.values())}")
+                sys.exit(f"studio-sync: no Studio picked this up within {seconds:g}s - is Studio running with "
+                         "a place open and the StudioSync plugin installed (and its HTTP permission allowed)?")
+
+        if reply.decided.is_set():
+            return reply.chosen
+        with reply.lock:
+            offers = list(reply.offers.values())
+        if reply.outdated:
+            print(f"studio-sync: skipping {outdated_note(reply)}", file=sys.stderr)
+
+        candidates = offers
+        if reply.explicit:
+            candidates = [offer for offer in offers if reply.explicit(offer)]
+        elif reply.allowed:
+            candidates = [offer for offer in offers if reply.allowed(offer)]
+        # decide() answers with an earlier choice if a place named by id offered just now.
+        chosen = reply.decide(candidates[0] if len(candidates) == 1 else None) if candidates else None
+        if chosen:
+            return chosen
+        if candidates:
+            break
+        # The place asked for may be in a Studio that is slow to answer (a busy one took
+        # minutes): wait for the next offer rather than refusing on the ones in so far.
+        if not waiting_note:
+            print(f"studio-sync: no Studio has {wanted} yet, waiting (up to {seconds:g}s in all). "
+                  f"Open so far:\n{listing(offers)}", file=sys.stderr)
+            waiting_note = True
+        changes = reply.changes
+        while reply.changes == changes and not reply.decided.is_set():
+            if time.monotonic() >= deadline:
+                sys.exit(f"studio-sync: no Studio had {wanted} within {seconds:g}s. Open:\n{listing(offers)}")
+            time.sleep(0.1)
+        window_from = time.monotonic()
     sys.exit(f"studio-sync: {len(candidates)} Studios could take this {what} - name one with --place "
              f"(a place id or name) or --studio (the id on the left):\n{listing(candidates)}")
 

@@ -1486,6 +1486,13 @@ to rebase).
   - `place` is what `list_roblox_studios` shows as `name`: `game.Name` for a local place,
     and for a published one its name from `MarketplaceService:GetProductInfo`, since its
     DataModel is named `Place1` like an unsaved one.
+    - The name is asked in the background, from the plugin's start. On prod a published
+      place's offer went out 2 minutes after it read the request, while the plugin waited
+      for GetProductInfo; the CLI had refused long before. Until the answer comes, the
+      offer says `game.Name`, and the CLI takes a later offer's new name.
+  - A run whose `--place` (or servePlaceIds) matches none of the offers in so far keeps
+    waiting for more until `--timeout`, saying so on stderr, rather than refusing at the
+    end of the 3 s window.
   - `--list` prints the offers. `--release` chooses the same way.
   - Why not MCP's `studio_id`: it isn't something a plugin is known to be able to read.
     The place id and name are visible to both.

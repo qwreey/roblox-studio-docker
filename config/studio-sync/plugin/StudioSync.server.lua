@@ -71,18 +71,33 @@ local function post(port, path, body)
 end
 
 -- The place's name as MCP's list_roblox_studios shows it. A published place's DataModel is
--- named like an unsaved one (Place1); its own name comes from Roblox, asked once.
+-- named like an unsaved one (Place1); its own name comes from Roblox, asked in the
+-- background. GetProductInfo can take minutes to answer (measured: an offer went out 2 min
+-- after its request, long after the CLI had given up), so nothing waits for it: until it
+-- answers, the place offers game.Name, and its place id still matches `--place <id>`.
 local publishedNames = {}
+local asking = {}
+local function askPublishedName(placeId)
+	if asking[placeId] then
+		return
+	end
+	asking[placeId] = true
+	task.spawn(function()
+		local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, placeId)
+		if ok and type(info) == "table" and type(info.Name) == "string" then
+			publishedNames[placeId] = info.Name
+		end
+		asking[placeId] = nil
+	end)
+end
+
 local function placeName()
 	local placeId = game.PlaceId
 	if placeId == 0 then
 		return game.Name
 	end
 	if publishedNames[placeId] == nil then
-		local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, placeId)
-		if ok and type(info) == "table" and type(info.Name) == "string" then
-			publishedNames[placeId] = info.Name
-		end
+		askPublishedName(placeId)
 	end
 	return publishedNames[placeId] or game.Name
 end
@@ -289,6 +304,8 @@ plugin.Unloading:Connect(function()
 end)
 
 task.spawn(function()
+	-- Asked ahead of the first request, so a published place offers under its own name.
+	placeName()
 	while running do
 		poll()
 		task.wait(POLL_SECONDS)
