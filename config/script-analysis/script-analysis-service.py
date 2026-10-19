@@ -8,8 +8,10 @@ header comment has how); this runs it in every Studio desktop that is up, on req
 Caddy (config/mcp/Caddyfile) puts this behind the MCP bridge's bearer token at
 /script-analysis; code-docker reads it with config/script-analysis/studio-analysis.
 
-GET /read   {"studios": [{"window", "status", "rows", "summary", "notes"}]}, one per Studio
-            desktop. "status" is shown, side-tab or dock-tab (the window was hidden there,
+GET /read[?place=NAME]
+            {"studios": [{"window", "status", "rows", "summary", "notes"}]}, one per Studio
+            main window, or only those whose title contains NAME - the others aren't
+            touched. "status" is shown, side-tab or dock-tab (the window was hidden there,
             shown for the read and hidden again) or closed. A desktop the reader didn't
             answer for has "error" instead.
 """
@@ -19,6 +21,7 @@ import re
 import subprocess
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("SCRIPT_ANALYSIS_PORT", "8810"))
@@ -59,7 +62,7 @@ def studio_desktops():
     return desktops
 
 
-def read_desktop(wine, desktop, display):
+def read_desktop(wine, desktop, display, place):
     out = f"/tmp/script-analysis-{desktop}.txt"
     try:
         os.unlink(out)
@@ -68,7 +71,8 @@ def read_desktop(wine, desktop, display):
     env = dict(os.environ, DISPLAY=display, WINEPREFIX=PREFIX, WINEDEBUG="-all")
     # The launcher returns before the reader finishes and drops its exit status; the reader
     # ends its file with "!done" instead.
-    subprocess.run([wine, "explorer", f"/desktop={desktop}", READER, "Z:" + out.replace("/", "\\")],
+    subprocess.run([wine, "explorer", f"/desktop={desktop}", READER, "Z:" + out.replace("/", "\\")]
+                   + ([place] if place else []),
                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
@@ -81,34 +85,43 @@ def read_desktop(wine, desktop, display):
             break
         time.sleep(0.2)
     else:
-        return {"desktop": desktop, "error": f"the reader didn't finish within {TIMEOUT}s"}
+        return [{"desktop": desktop, "error": f"the reader didn't finish within {TIMEOUT}s"}]
 
-    studio = {"window": "", "status": "", "rows": [], "summary": [], "notes": []}
+    # A block per Studio main window, each starting with its window line.
+    studios, studio = [], None
     for line in text.splitlines():
         key, _, value = line.partition("\t")
+        if key == "!done":
+            continue
+        if key == "window" or studio is None:
+            studio = {"window": "", "status": "", "rows": [], "summary": [], "notes": []}
+            studios.append(studio)
         if key in ("window", "status"):
             studio[key] = value
         elif key == "row":
             studio["rows"].append(value)
         elif key in ("summary", "note"):
             studio["summary" if key == "summary" else "notes"].append(value)
-    return studio
+    return studios
 
 
-def read_all():
+def read_all(place):
     wine = studio_wine()
     if not wine:
         return {"studios": [], "error": "no Wine found to run the reader with"}
     with reading:
-        return {"studios": [read_desktop(wine, desktop, display) for desktop, display in studio_desktops()]}
+        return {"studios": [studio for desktop, display in studio_desktops()
+                            for studio in read_desktop(wine, desktop, display, place)]}
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path != "/read":
+        url = urllib.parse.urlsplit(self.path)
+        if url.path != "/read":
             self.send_error(404)
             return
-        body = json.dumps(read_all()).encode()
+        place = urllib.parse.parse_qs(url.query).get("place", [""])[0]
+        body = json.dumps(read_all(place)).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 URL = os.environ.get("SCRIPT_ANALYSIS_URL", "http://studio:8787/script-analysis")
@@ -54,7 +55,10 @@ def main():
         sys.exit("studio-analysis: MCP_TOKEN is not set - it's the token of Studio's MCP bridge, "
                  "which this reads through")
 
-    request = urllib.request.Request(f"{URL}/read",
+    # The service reads only the Studios the place names: reading one clicks its tabs and
+    # scrolls its list. The filter below still applies, for a service from before that.
+    query = "?" + urllib.parse.urlencode({"place": args.place}) if args.place else ""
+    request = urllib.request.Request(f"{URL}/read{query}",
                                      headers={"Authorization": f"Bearer {os.environ['MCP_TOKEN']}"})
     try:
         with urllib.request.urlopen(request, timeout=300) as response:

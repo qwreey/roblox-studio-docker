@@ -1,7 +1,10 @@
-/* script-analysis OUT-FILE
+/* script-analysis OUT-FILE [PLACE]
  *
  * Writes what Roblox Studio's Script Analysis window lists to OUT-FILE (UTF-8), read through
  * Qt's UI Automation provider - no keys, no clipboard, and the real pointer never moves.
+ * Every Studio main window in the desktop is read in turn, or only those whose title
+ * contains PLACE: the others are left untouched, since reading one clicks its tabs and
+ * scrolls its list.
  * script-analysis-service.py runs it inside a Studio's desktop (`wine explorer
  * /desktop=<name> script-analysis.exe <file>`); CLAUDE.md's "script-analysis" has the
  * measurements behind each step.
@@ -19,8 +22,10 @@
  *   - A closed window has no tab, and Studio's Window menu ignores posted input, so that
  *     case is reported rather than handled.
  *
- * Output lines:  window\t<main window title>   status\t<shown|side-tab|dock-tab|closed>
- *                row\t<tree row>   summary\t<"2 of 2 Errors" ...>   note\t<problem>   !done */
+ * Output lines, a block per Studio from its window line on:
+ *                window\t<main window title>   status\t<shown|side-tab|dock-tab|closed>
+ *                row\t<tree row>   summary\t<"2 of 2 Errors" ...>   note\t<problem>
+ * and !done at the very end. */
 #define COBJMACROS
 #include <windows.h>
 #include <ole2.h>
@@ -39,6 +44,8 @@ static const IID iid_iuia = {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5
 #define MAX_ROWS 20000
 
 static FILE *out;
+/* PLACE, or NULL for every Studio. */
+static const WCHAR *want_place;
 static IUIAutomation *uia;
 static IUIAutomationTreeWalker *walker;
 
@@ -50,6 +57,7 @@ struct list
 
 struct found
 {
+    DWORD pid; /* the Studio process whose windows are searched */
     IUIAutomationElement *tree, *tab;
     HWND tree_hwnd, tab_hwnd;
 };
@@ -177,14 +185,18 @@ static void walk(IUIAutomationElement *el, HWND hwnd, int depth, struct found *f
 
 static BOOL CALLBACK find_in_window(HWND hwnd, LPARAM lparam)
 {
+    struct found *f = (struct found *)lparam;
     WCHAR cls[64];
+    DWORD pid = 0;
     IUIAutomationElement *el = NULL;
     if (!IsWindowVisible(hwnd)) return TRUE;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != f->pid) return TRUE;
     GetClassNameW(hwnd, cls, 64);
     if (wcsncmp(cls, L"Qt", 2)) return TRUE;
     if (SUCCEEDED(IUIAutomation_ElementFromHandle(uia, hwnd, &el)) && el)
     {
-        walk(el, hwnd, 0, (struct found *)lparam);
+        walk(el, hwnd, 0, f);
         IUIAutomationElement_Release(el);
     }
     return TRUE;
@@ -192,9 +204,11 @@ static BOOL CALLBACK find_in_window(HWND hwnd, LPARAM lparam)
 
 static void found_clear(struct found *f)
 {
+    DWORD pid = f->pid;
     if (f->tree) IUIAutomationElement_Release(f->tree);
     if (f->tab) IUIAutomationElement_Release(f->tab);
     memset(f, 0, sizeof(*f));
+    f->pid = pid;
 }
 
 static void find(struct found *f)
@@ -434,25 +448,37 @@ done:
     return restored;
 }
 
-static BOOL CALLBACK main_title(HWND hwnd, LPARAM unused)
+#define MAX_STUDIOS 16
+
+struct studios
 {
+    HWND hwnd[MAX_STUDIOS];
+    int n;
+};
+
+/* Collects Studio's main windows ("<place> - Roblox Studio"), those PLACE names if given. */
+static BOOL CALLBACK main_window(HWND hwnd, LPARAM lparam)
+{
+    struct studios *s = (struct studios *)lparam;
     WCHAR title[512];
     if (!IsWindowVisible(hwnd) || !GetWindowTextW(hwnd, title, 512)) return TRUE;
     size_t n = wcslen(title), suffix = wcslen(L" - Roblox Studio");
-    if (n > suffix && !wcscmp(title + n - suffix, L" - Roblox Studio"))
-    {
-        put("window", title);
-        return FALSE;
-    }
+    if (n > suffix && !wcscmp(title + n - suffix, L" - Roblox Studio")
+        && (!want_place || wcsstr(title, want_place)) && s->n < MAX_STUDIOS)
+        s->hwnd[s->n++] = hwnd;
     return TRUE;
 }
 
-static void run(void)
+static void read_studio(HWND main)
 {
     struct found f = {0};
     struct list rows = {0}, before = {0};
     const char *status = "shown";
-    EnumWindows(main_title, 0);
+    WCHAR title[512];
+    GetWindowTextW(main, title, 512);
+    put("window", title);
+    /* Only this Studio's windows: another one in the same desktop has its own. */
+    GetWindowThreadProcessId(main, &f.pid);
 
     find(&f);
     if (!f.tree && f.tab)
@@ -505,9 +531,17 @@ done:
     free(before.v);
 }
 
+static void run(void)
+{
+    struct studios studios = {0};
+    EnumWindows(main_window, (LPARAM)&studios);
+    for (int i = 0; i < studios.n; i++) read_studio(studios.hwnd[i]);
+}
+
 int wmain(int argc, WCHAR **argv)
 {
     if (argc < 2) return 2;
+    if (argc > 2 && *argv[2]) want_place = argv[2];
     out = _wfopen(argv[1], L"w");
     if (!out) return 3;
     CoInitializeEx(NULL, COINIT_MULTITHREADED);

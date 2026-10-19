@@ -1339,6 +1339,13 @@ no clipboard, and the real pointer never moves.
 - **`script-analysis-service.py`** (supervisord `script-analysis`) runs it in every Studio
   desktop on `GET /read`, one read at a time, served on `127.0.0.1:8810`. Caddy serves it
   at `studio:8787/script-analysis/` behind the MCP token, like studio-output.
+  - `studio-analysis --place X` sends `?place=X`, and the reader reads only the Studio
+    main windows whose title contains it. Before, every Studio was read and the CLI
+    filtered afterwards: on prod a `--place quad-test` read clicked and scrolled
+    table-sim's window, in the desktop on top, and quad-test's answer was the only one
+    shown.
+  - Each Studio main window in a desktop is its own block, searched only among its own
+    process's windows.
 - **`studio-analysis`** (CLI) is mounted into code-docker by the overlay, the same way as
   studio-sync. `mcp-shared-notice.md` points agents at it.
 
