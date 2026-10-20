@@ -386,7 +386,10 @@ virtual desktop filling the screen above waybar. Each piece is load-bearing:
   but not a grow, the windows in it neither). It does the same for every newly launched
   Studio desktop, writing `"Default"` through the now-running wineserver first — the only
   way a fresh install's first launch (prefix and desktop created back to back) or a
-  recreated prefix gets the right size. The tool reports `ok`/`refused` through
+  recreated prefix gets the right size. With no VNC client for 15 s it also sets the
+  screen back to `DESKTOP_RESOLUTION` (`wayvncctl client-list`): wayvnc keeps the last
+  client's size, and an agent's MCP captures and viewport clicks were left with what a
+  narrow pane had asked for. The tool reports `ok`/`refused` through
   `/tmp/desktop-resize.status`, since the `wine explorer` launcher drops its exit status.
   That tool's comments carry the three Wine
   quirks it works around — maximized windows aren't refitted, the taskbar isn't taken out

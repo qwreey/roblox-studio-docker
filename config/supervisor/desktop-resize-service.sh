@@ -19,6 +19,43 @@ current_screen() {
   wlr-randr --output HEADLESS-1 2>/dev/null | sed -n 's/^[[:space:]]*\([0-9]\+x[0-9]\+\) px.*(current).*/\1/p' | head -n1
 }
 
+# How many VNC clients wayvnc has, or nothing when it can't be asked (not up yet).
+vnc_client_count() {
+  local list
+  list="$(wayvncctl client-list 2>/dev/null)" || return 1
+  grep -c '^[[:space:]]*[0-9]\+:' <<<"${list}" || true  # prints 0, and fails, on none
+}
+
+# With no VNC client for IDLE_SECONDS, the screen goes back to DESKTOP_RESOLUTION. wayvnc
+# keeps whatever size the last client asked for, and what an agent sees through Studio's
+# MCP (screen captures, clicks inside the viewport) is that screen: a viewer last seen in
+# a narrow pane or a phone left Studio's viewport too small to use. The wait lets a viewer
+# reload or reconnect without resizing Studio twice; one that connects asks for its own
+# size again.
+IDLE_SECONDS=15
+DESKTOP_RESOLUTION="${DESKTOP_RESOLUTION:-1920x1080}"
+idle_since=""  # when the last VNC client left; empty while one is connected
+idle_reset=0   # the screen was already put back for this idle stretch
+
+reset_idle_screen() {
+  local screen="$1" clients
+  clients="$(vnc_client_count)" || return 0
+  if (( clients > 0 )); then
+    idle_since=""
+    idle_reset=0
+    return 0
+  fi
+  [[ -n "${idle_since}" ]] || idle_since="${SECONDS}"
+  (( ! idle_reset && SECONDS - idle_since >= IDLE_SECONDS )) || return 0
+  idle_reset=1
+  [[ -n "${screen}" && "${screen}" != "${DESKTOP_RESOLUTION}" ]] || return 0
+  if wlr-randr --output HEADLESS-1 --custom-mode "${DESKTOP_RESOLUTION}" >/dev/null 2>&1; then
+    echo "[desktop-resize] no VNC client for ${IDLE_SECONDS}s: screen ${screen} back to ${DESKTOP_RESOLUTION}"
+  else
+    echo "[desktop-resize] no VNC client for ${IDLE_SECONDS}s, but setting the screen back to ${DESKTOP_RESOLUTION} failed" >&2
+  fi
+}
+
 # Every Studio desktop that is up, one pid per line: Vinegar launches each Studio as
 # `explorer /desktop=<uuid>,WxH`, a new uuid every time, so two open places are two desktops
 # (our own `explorer /desktop=<uuid> <program>` launches below have no `,` and don't match).
@@ -59,6 +96,7 @@ declare -A seen_at=()  # Studio desktop pid -> when it was first seen; left alon
 declare -A applied=()  # Studio desktop pid -> the size it was last resized to
 while true; do
   screen="$(current_screen)"
+  reset_idle_screen "${screen}"
   mapfile -t desktop_pids < <(studio_desktop_pids)
   for pid in "${!seen_at[@]}"; do
     [[ " ${desktop_pids[*]} " == *" ${pid} "* ]] || unset "seen_at[${pid}]" "applied[${pid}]"

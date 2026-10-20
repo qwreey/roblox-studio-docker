@@ -168,7 +168,9 @@ scary "host key changed" warning every time the container comes back up.
 - **Resizing the client window resizes the remote desktop to match** (the RFB
   `SetDesktopSize` extension — noVNC's "Remote resizing", TigerVNC and most modern
   clients), and Studio follows about two seconds after the window stops changing size.
-  `DESKTOP_RESOLUTION` (default `1920x1080`) is only the size before any client asks.
+  `DESKTOP_RESOLUTION` (default `1920x1080`) is the size while no client is connected:
+  at start, and again 15 seconds after the last one disconnects, so an agent working
+  through Studio's MCP isn't left with the viewport a small window or phone asked for.
 - **The file manager is Thunar** (app launcher → "Thunar File Manager"). Nautilus is installed
   only as a portal dependency and refuses to run as root, which everything here is.
 - Disconnecting the VNC client does **not** stop anything — labwc, Studio, Vinegar, the
