@@ -125,7 +125,10 @@ RUN pacman -Syu --noconfirm --needed \
 
 # labwc and Xwayland rebuilt with config/pointer-warp/'s two patches. They make a dragged 3D
 # camera usable through VNC's absolute pointer - what each one fixes: the patches' own
-# comments and CLAUDE.md's "Camera drag over VNC". This stage starts FROM base, so the
+# comments and CLAUDE.md's "Camera drag over VNC". labwc also gets
+# config/labwc-placement/'s, which keeps Studio's Wine desktops from snapping back to their
+# launch size whenever a VNC viewer sets the screen (CLAUDE.md's "Panels: Wine virtual
+# desktop"). This stage starts FROM base, so the
 # sources are those of exactly the labwc/xorg-xwayland (and wlroots) the runtime image
 # installed, and the build-only packages never reach it; only the two binaries are copied.
 # `--fuzz=0` makes a release that moved the patched code fail the build instead of applying
@@ -133,6 +136,7 @@ RUN pacman -Syu --noconfirm --needed \
 FROM base AS pointer-warp-build
 RUN pacman -S --noconfirm --needed meson ninja xorgproto xtrans libxkbfile xorg-font-util
 COPY config/pointer-warp/ /tmp/pointer-warp/
+COPY config/labwc-placement/labwc-client-configure-placement.patch /tmp/pointer-warp/
 RUN pkgver() { pacman -Q "$1" | awk '{print $2}' | sed 's/^[0-9]*://; s/-[^-]*$//'; } \
     && LABWC_VERSION="$(pkgver labwc)" && XWAYLAND_VERSION="$(pkgver xorg-xwayland)" \
     && mkdir -p /tmp/pointer-warp/labwc /tmp/pointer-warp/xwayland \
@@ -141,6 +145,7 @@ RUN pkgver() { pacman -Q "$1" | awk '{print $2}' | sed 's/^[0-9]*://; s/-[^-]*$/
     && curl -fsSL "https://xorg.freedesktop.org/archive/individual/xserver/xwayland-${XWAYLAND_VERSION}.tar.xz" \
          | tar xJ -C /tmp/pointer-warp/xwayland --strip-components=1 \
     && patch -d /tmp/pointer-warp/labwc -p1 --fuzz=0 < /tmp/pointer-warp/labwc-locked-absolute-motion.patch \
+    && patch -d /tmp/pointer-warp/labwc -p1 --fuzz=0 < /tmp/pointer-warp/labwc-client-configure-placement.patch \
     && patch -d /tmp/pointer-warp/xwayland -p1 --fuzz=0 < /tmp/pointer-warp/xwayland-absolute-motion-after-warp.patch \
     && meson setup /tmp/pointer-warp/labwc/build /tmp/pointer-warp/labwc --buildtype=release \
          -Dxwayland=enabled -Dman-pages=disabled -Dnls=disabled -Dlabnag=disabled -Dsystemd-session=disabled \

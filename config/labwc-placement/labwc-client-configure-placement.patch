@@ -1,0 +1,21 @@
+--- a/src/xwayland.c
++++ b/src/xwayland.c
+@@ -485,6 +485,18 @@
+ 			.width = event->width, .height = event->height};
+ 		view_adjust_size(view, &box.width, &box.height);
+ 		xwayland_view_configure(view, box);
++		/*
++		 * Keep it as the view's last placement, as view_move_resize()
++		 * does for a move the compositor makes. Otherwise the next
++		 * output layout change puts the view back where it was before
++		 * the client moved or resized itself - for a Wine virtual
++		 * desktop, the size it was created with. A VNC server setting
++		 * the output to the mode it already has (a viewer asking for
++		 * its own size again) is such a change.
++		 */
++		if (view->mapped && !view->adjusting_for_layout_change) {
++			view_save_last_placement(view);
++		}
+ 	} else {
+ 		/*
+ 		 * Do not allow clients to request geometry other than

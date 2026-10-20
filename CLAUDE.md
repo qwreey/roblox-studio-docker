@@ -397,6 +397,17 @@ virtual desktop filling the screen above waybar. Each piece is load-bearing:
   `wine explorer /desktop=<existing name> <program>` resets that desktop's work area to the
   whole desktop, so a work area read by a tool launched that way says nothing about what
   Studio sees — desktop-resize.exe sets it last for exactly this reason.
+- **labwc put the desktops back to their launch size** (patched,
+  `config/labwc-placement/`). On every output layout change labwc moves each window to its
+  remembered placement, and it remembers only moves it made itself: Wine resizing its
+  desktop window by a ConfigureRequest left the placement at the launch size. A VNC viewer
+  setting the screen to the size it already has is such a change: noVNC measures its frame
+  in fractional CSS pixels (a 125% display gives 1023.2), so its "same size?" check fails
+  and it sends the size again whenever its frame is shown or resized. On prod, switching
+  back to a popped-out VNC window did that and left both desktops at 1496x918 inside a
+  2048x1023 screen, with nothing to undo it: `desktop-resize` acts only on a new screen
+  size. Measured with `research/vnc-watch.py` on prod and reproduced on the test stack;
+  upstream draft in `research/upstream-reports/labwc-client-configure-placement.md`.
 - **Floating panels kept above the main window** (`wine-owned-popups`, a small X client
   run as its own supervisord program). A floating panel is a popup owned by Studio's main
   window, which Windows keeps above its owner; upstream Wine doesn't inside a virtual
@@ -454,7 +465,10 @@ relaunch Studio. Docking and floating-panel resizing break again; everything els
 
 **Debugging it again**: drive the session with a scripted RFB client
 (`vncdotool` from PyPI: `vncdo -s 127.0.0.1::<port> move X Y mousedown 1 ... mouseup 1`) and
-read the result with `grim` — a VNC screenshot via vncdo came back unusable. `xwininfo
+read the result with `grim` — a VNC screenshot via vncdo came back unusable. For a size
+problem, `research/vnc-watch.py` (its header says how to run it) prints, on one clock,
+every size each VNC connection asks for, `desktop-resize`'s log, and each Wine desktop's
+X geometry whenever it changes; it needs nothing the image doesn't have. `xwininfo
 -root -tree` (pacman `xorg-xwininfo`, ad hoc) shows every Wine window as a child of its
 `<uuid> - Wine Desktop` X window, in X stacking order; `xprop -id` on one shows its
 `WM_TRANSIENT_FOR`. For the win32 side (z-order, work area, foreground), a few-line Win32
