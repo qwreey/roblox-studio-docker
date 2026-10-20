@@ -1371,6 +1371,23 @@ no clipboard, and the real pointer never moves.
     scroll position restored pixel-for-pixel.
   - Qt also counts a row or two above the viewport as visible, which first left the
     restored list two rows too high. The reader now measures that and scrolls it off.
+  - **Qt scrolls at most one page per wheel event**, so the reader sends 3 rows per
+    message. Sent 20 at a time, putting a list back 179 rows down moved it 63.
+  - **The ends are found by where the rows sit, not by their text.** Qt also exposes the
+    rows cut by the viewport's edges, so a last row reaching past the tree's bottom
+    (measured 16 px for a one-line entry, 437 px for a long type error) means more below.
+    A page that read the same after a scroll was taken as the end before: on prod a list
+    of 1334 warnings stopped at a long type error, every time at the same row, with no
+    note. The same message at the same place can be listed several times in a row.
+    Checked on the test stack by making every row read the same text: the reader kept
+    going (365 rows) until its stall guard (50 unchanged pages) stopped it with a note.
+  - **Put back by the whole page.** The first row's text alone matched the same warning
+    in an earlier script; measured from four scroll positions (top, mid, inside a run of
+    long type errors, end), each restored with the list identical on screen.
+  - **A modal dialog** (Studio's "Dangerous Command Detected", say) disables the main
+    window, and Qt then ignores the wheel. The reader notes it and reads the rows in view.
+  - 940 rows (30 scripts, 918 warnings, 8 of them 25-line type errors) take ~80 s, so the
+    service allows a desktop 600 s.
 - **Collapsed script groups** have no rows for their entries in Qt's model. They are
   reported, not expanded: expanding takes a click on the tree, which would also take
   Studio's keyboard focus.

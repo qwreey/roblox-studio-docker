@@ -31,10 +31,13 @@ def show(studio):
     if studio["status"] == "closed":
         print(CLOSED)
     rows = studio["rows"]
+    entries, collapsed = 0, False
     for i, row in enumerate(rows):
         if ENTRY.match(row):
+            entries += 1
             print(f"  {row}")
         elif i + 1 == len(rows) or not ENTRY.match(rows[i + 1]):
+            collapsed = True
             print(f"{row}  (collapsed in Studio; expand it there to list its entries)")
         else:
             print(row)
@@ -42,6 +45,11 @@ def show(studio):
         print(", ".join(studio["summary"]))
         if any(re.match(r"^(\d+) of (?!\1\b)\d+ ", s) for s in studio["summary"]):
             print("(some are filtered out by the window's own buttons or 'Display only current script')")
+        # "N of M Warnings": N is what the window lists. A collapsed script's entries aren't
+        # rows, so the count only holds without one.
+        listed = sum(int(m.group(1)) for m in (re.match(r"^(\d+) of ", s) for s in studio["summary"]) if m)
+        if not collapsed and entries < listed:
+            print(f"note: read {entries} of the {listed} entries the window lists; the rest are missing")
     for note in studio["notes"]:
         print(f"note: {note}")
 
@@ -61,7 +69,8 @@ def main():
     request = urllib.request.Request(f"{URL}/read{query}",
                                      headers={"Authorization": f"Bearer {os.environ['MCP_TOKEN']}"})
     try:
-        with urllib.request.urlopen(request, timeout=300) as response:
+        # The service gives each Studio up to 600 s (a long list), one after the other.
+        with urllib.request.urlopen(request, timeout=1800) as response:
             result = json.load(response)
     except urllib.error.HTTPError as error:
         sys.exit(f"studio-analysis: {URL} answered {error.code}"

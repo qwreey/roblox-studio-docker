@@ -27,8 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(os.environ.get("SCRIPT_ANALYSIS_PORT", "8810"))
 READER = r"Z:\usr\local\lib\roblox-studio\script-analysis.exe"
 PREFIX = os.path.expanduser("~/.local/share/vinegar/prefixes/studio")
-# Paging through a long list takes about a second per screenful.
-TIMEOUT = 120
+# Paging through a long list takes about 0.6 s per screenful: 940 rows took 86 s.
+TIMEOUT = 600
 
 # One read at a time: a read clicks tabs and scrolls the tree, and two at once would fight.
 reading = threading.Lock()

@@ -60,6 +60,8 @@ struct found
     DWORD pid; /* the Studio process whose windows are searched */
     IUIAutomationElement *tree, *tab;
     HWND tree_hwnd, tab_hwnd;
+    /* Where the rows visible_rows() last saw start and end, and where the tree does. */
+    LONG rows_top, rows_bottom, tree_top, tree_bottom;
 };
 
 static void put(const char *key, const WCHAR *s)
@@ -248,13 +250,16 @@ static void click(HWND hwnd, IUIAutomationElement *el)
     PostMessageW(hwnd, WM_LBUTTONUP, 0, lp);
 }
 
-/* Scrolls the tree by ROWS (negative: down). WM_MOUSEWHEEL carries screen coordinates. */
+/* Scrolls the tree by ROWS (negative: down). WM_MOUSEWHEEL carries screen coordinates.
+ * Qt scrolls at most a page per wheel event, so it goes in steps well under one: sent in
+ * 20s, a 179-row scroll moved 63. */
+#define ROWS_PER_WHEEL 3
 static void scroll(struct found *f, int rows)
 {
     POINT pt = center_of(f->tree);
     while (rows)
     {
-        int step = rows > 20 ? 20 : rows < -20 ? -20 : rows;
+        int step = rows > ROWS_PER_WHEEL ? ROWS_PER_WHEEL : rows < -ROWS_PER_WHEEL ? -ROWS_PER_WHEEL : rows;
         PostMessageW(f->tree_hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)(short)(step * WHEEL_PER_ROW)),
                      MAKELPARAM(pt.x, pt.y));
         rows -= step;
@@ -266,31 +271,60 @@ static void scroll(struct found *f, int rows)
 
 static void visible_rows(struct found *f, struct list *rows)
 {
+    RECT rc = {0};
     list_clear(rows);
+    IUIAutomationElement_get_CurrentBoundingRectangle(f->tree, &rc);
+    f->tree_top = rc.top;
+    f->tree_bottom = rc.bottom;
+    f->rows_top = rc.top;
+    f->rows_bottom = rc.top;
+    /* Only the first and last rows are measured: each call is another ~30 ms. */
+    IUIAutomationElement *last = NULL;
     for (IUIAutomationElement *row = first_child(f->tree), *next; row; row = next)
     {
         BSTR name = name_of(row);
         if (name && *name) list_add(rows, name);
         else SysFreeString(name);
+        if (!last)
+        {
+            IUIAutomationElement_get_CurrentBoundingRectangle(row, &rc);
+            f->rows_top = rc.top;
+        }
         next = next_sibling(row);
-        IUIAutomationElement_Release(row);
+        if (last) IUIAutomationElement_Release(last);
+        last = row;
     }
+    if (last)
+    {
+        IUIAutomationElement_get_CurrentBoundingRectangle(last, &rc);
+        f->rows_bottom = rc.bottom;
+        IUIAutomationElement_Release(last);
+    }
+}
+
+/* Qt also exposes the rows cut by the viewport's edges, so a row reaching past the tree's top
+ * or bottom means the list goes on that way. Measured: mid-list the last row ended 16 px
+ * below the tree (437 px for a long type error), at the end 1 px inside. Text can't tell:
+ * the same message at the same place can be listed several times in a row, and a page of
+ * those looks the same after a scroll. */
+static int at_top(struct found *f)
+{
+    return f->rows_top >= f->tree_top;
+}
+
+static int at_bottom(struct found *f)
+{
+    return f->rows_bottom <= f->tree_bottom;
 }
 
 static void scroll_to_top(struct found *f, struct list *page)
 {
-    struct list prev = {0};
     visible_rows(f, page);
-    for (int i = 0; i < 200; i++)
+    for (int i = 0; i < 200 && page->n && !at_top(f); i++)
     {
-        list_clear(&prev);
-        for (int j = 0; j < page->n; j++) list_add(&prev, SysAllocString(page->v[j]));
         scroll(f, 60);
         visible_rows(f, page);
-        if (list_equal(&prev, page)) break;
     }
-    list_clear(&prev);
-    free(prev.v);
 }
 
 /* Appends PAGE's rows that ALL doesn't end with yet. EXPECTED is the overlap the scroll
@@ -309,19 +343,23 @@ static int merge(struct list *all, struct list *page, int expected)
     return 1;
 }
 
-static void read_rows(struct found *f, struct list *all)
+/* Reads every row, or with SCROLL_OK 0 only those in view. */
+static void read_rows(struct found *f, struct list *all, int scroll_ok)
 {
-    struct list page = {0}, prev = {0};
+    struct list page = {0}, prev = {0}, start = {0};
     visible_rows(f, &page);
-    if (!page.n)
+    if (!page.n || !scroll_ok)
     {
+        for (int i = 0; i < page.n; i++) list_add(all, page.v[i]);
         free(page.v);
         return;
     }
-    BSTR first = SysAllocString(page.v[0]);
+    for (int i = 0; i < page.n; i++) list_add(&start, SysAllocString(page.v[i]));
 
     scroll_to_top(f, &page);
     for (int i = 0; i < page.n; i++) list_add(all, SysAllocString(page.v[i]));
+    /* Pages in a row that looked the same as the one before. */
+    int unmoved = 0;
     for (int guard = 0; guard < 2000 && all->n < MAX_ROWS; guard++)
     {
         int step = page.n > 3 ? page.n - 2 : 1;
@@ -335,7 +373,22 @@ static void read_rows(struct found *f, struct list *all)
             note("the window was hidden during the read; rows may be missing");
             break;
         }
-        if (list_equal(&prev, &page)) break;
+        if (list_equal(&prev, &page))
+        {
+            if (at_bottom(f)) break;
+            /* Not the end: either Studio hasn't applied the scroll yet, or these rows repeat
+             * and it has. Give it time, then take the page as it is. */
+            Sleep(300);
+            visible_rows(f, &page);
+            if (list_equal(&prev, &page) && at_bottom(f)) break;
+            if (list_equal(&prev, &page) && ++unmoved > 50)
+            {
+                note("the list stopped scrolling before its end; rows are missing");
+                break;
+            }
+        }
+        else
+            unmoved = 0;
         if (!merge(all, &page, prev.n - step))
         {
             /* Scrolled further than a page: Qt's wheel setting isn't the 3 lines assumed. */
@@ -344,37 +397,42 @@ static void read_rows(struct found *f, struct list *all)
         }
     }
 
-    /* Back to where the person left it: the first row they had at the top, at the top. */
+    /* Back to where the person left it: the page they had, at the top. Found as the whole
+     * page, not its first row: the same message repeats across scripts (Unknown global 'x'
+     * at the same place in two copies), and the first match of one row put the list back
+     * in another script. */
     int at = 0;
-    for (int i = 0; i < all->n; i++)
-        if (!wcscmp(all->v[i], first))
+    for (int i = 0; i + start.n <= all->n; i++)
+        if (range_equal(all, i, &start, 0, start.n))
         {
             at = i;
             break;
         }
     scroll_to_top(f, &page);
     scroll(f, -at);
-    /* Qt counts a row or two above the viewport as visible too, so at the top the first
-     * reported row is the first row, and further down it is that many rows above the real
-     * top: the same first row is reached a little early. Measure the shortfall and scroll it
-     * off. (The list repeats itself across scripts, so the page is matched at a position,
-     * not searched for by text.) */
-    visible_rows(f, &page);
-    for (int k = at; page.n && k >= 0 && k > at - 20; k--)
+    /* Then check where it landed and correct: Qt counts a row or two above the viewport as
+     * visible too, so a scroll from the top falls a little short. The page is placed at the
+     * match nearest to where it should be, since the list repeats itself across scripts. */
+    for (int tries = 0; tries < 5; tries++)
     {
-        int n = page.n < all->n - k ? page.n : all->n - k;
-        if (n > 0 && range_equal(all, k, &page, 0, n))
-        {
-            if (k < at) scroll(f, -(at - k));
-            break;
-        }
+        visible_rows(f, &page);
+        int landed = -1;
+        for (int d = 0; page.n && landed < 0 && d < all->n; d++)
+            for (int sign = 1; sign >= -1 && landed < 0; sign -= 2)
+            {
+                int k = at + sign * d;
+                if (k >= 0 && k + page.n <= all->n && range_equal(all, k, &page, 0, page.n)) landed = k;
+            }
+        if (landed < 0 || landed == at) break;
+        scroll(f, landed - at);
     }
 
-    SysFreeString(first);
     list_clear(&page);
     list_clear(&prev);
+    list_clear(&start);
     free(page.v);
     free(prev.v);
+    free(start.v);
 }
 
 static void summary(struct found *f)
@@ -477,6 +535,10 @@ static void read_studio(HWND main)
     WCHAR title[512];
     GetWindowTextW(main, title, 512);
     put("window", title);
+    int enabled = IsWindowEnabled(main);
+    if (!enabled)
+        note("a dialog is open in this Studio, and its other windows take no input until it closes: "
+             "only the rows in view could be read, and a hidden window couldn't be shown");
     /* Only this Studio's windows: another one in the same desktop has its own. */
     GetWindowThreadProcessId(main, &f.pid);
 
@@ -504,7 +566,7 @@ static void read_studio(HWND main)
         goto done;
     }
 
-    read_rows(&f, &rows);
+    read_rows(&f, &rows, enabled);
     for (int i = 0; i < rows.n; i++) put("row", rows.v[i]);
     summary(&f);
 
